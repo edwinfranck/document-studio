@@ -1,0 +1,85 @@
+/* Les règles de coupure n'utilisent jamais .sd-print : Paged.js les évalue sur le contenu, sans <body>.
+   Document paginé (Paged.js) : couverture, sommaire avec numéros de page, règles de coupure. */
+.sd-print { background: #fff; }
+.sd-print .sd-body { font-size: var(--sd-size-base); }
+.sd-body h1, .sd-body h2, .sd-body h3, .sd-body h4, .sd-body h5, .sd-body h6 { break-after: avoid; break-inside: avoid; }
+.sd-print .sd-body h1 { string-set: sd-section content(text); }
+.sd-print .sd-body h2 { string-set: sd-section content(text); }
+.sd-print .sd-body p { orphans: 3; widows: 3; }
+.sd-body figure, .sd-body .sd-callout, .sd-body .sd-card, .sd-body .sd-stats, .sd-body .sd-pullquote, .sd-body .sd-columns, .sd-body .sd-grid, .sd-body .sd-math, .sd-body blockquote, .sd-body li { break-inside: avoid; }
+.sd-body tr, .sd-body .sd-code-head { break-inside: avoid; }
+.sd-body .sd-code:not(.sd-long) { break-inside: avoid; }
+.sd-body .sd-code pre { white-space: pre-wrap; word-break: break-word; overflow: visible; font-size: .78em; }
+.sd-print .sd-body thead { display: table-header-group; }
+.sd-print .sd-table { font-size: .84em; }
+.sd-print .sd-table-wrap { overflow: visible; }
+.sd-print .sd-table :is(td, th) { overflow-wrap: anywhere; hyphens: auto; }
+.sd-pagebreak { display: block; break-after: page; height: 0; }
+.sd-footnotes { break-before: auto; }
+.sd-print .sd-body a[href^="http"]::after { content: ""; }
+.sd-print .sd-figure img { max-height: 120mm; width: auto; }
+.sd-print .sd-figure.sd-align-full img { width: 100%; max-height: none; }
+.sd-print .sd-section.sd-full { border-radius: 0; margin-left: calc(var(--sd-margin-l) * -1); margin-right: calc(var(--sd-margin-r) * -1); padding-left: var(--sd-margin-l); padding-right: var(--sd-margin-r); }
+.sd-print .sd-aside { width: auto; float: none; }
+.sd-print .sd-spacer:first-child { display: none; }
+.sd-print .sd-doc-head { margin-bottom: 2.4em; padding-bottom: 1.4em; border-bottom: 1px solid var(--sd-c-border); }
+.sd-print .sd-doc-head .sd-title { font-size: calc(var(--sd-h1) * 1.1); margin: 0; }
+.sd-print .sd-eyebrow { font-size: .75em; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--sd-c-accent); margin-bottom: 1em; }
+.sd-print .sd-subtitle { margin: .6em 0 0; font-size: 1.15em; color: var(--sd-c-muted); line-height: 1.4; }
+.sd-print .sd-meta { display: flex; flex-wrap: wrap; gap: .3em 1.4em; margin-top: 1.2em; font-size: .85em; color: var(--sd-c-muted); }
+
+/* Marges de page */
+.pagedjs_margin-content { font-family: var(--sd-font-body); font-size: 7.5pt; color: var(--sd-c-muted); letter-spacing: .02em; }
+.pagedjs_margin-top-left .pagedjs_margin-content, .pagedjs_margin-top-right .pagedjs_margin-content { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Couverture */
+.sd-cover { page: sd-cover; break-after: page; position: relative; display: flex; flex-direction: column; width: var(--sd-page-w); height: var(--sd-page-h); padding: 22mm 20mm 20mm; background: var(--sd-c-bg); }
+.sd-cover .sd-title { font-size: calc(var(--sd-h1) * 1.7); line-height: 1.02; margin: 0; text-transform: var(--sd-case-heading); color: var(--sd-c-primary); }
+.sd-cover .sd-subtitle { font-size: 1.35em; margin-top: 1em; line-height: 1.35; max-width: 34em; }
+.sd-cover .sd-eyebrow { margin: 0; }
+.sd-cover-main { margin-top: auto; margin-bottom: auto; }
+.sd-cover-foot { display: flex; flex-wrap: wrap; gap: .3em 1.6em; font-size: .9em; color: var(--sd-c-muted); }
+.sd-cover-minimal .sd-cover-main { margin-top: 38%; }
+.sd-cover-minimal .sd-cover-foot { margin-top: auto; padding-top: 1em; border-top: 1px solid var(--sd-c-border); }
+.sd-cover-band { padding: 0; }
+.sd-cover-band .sd-cover-top { height: 0; }
+.sd-cover-band .sd-cover-main { margin: 0; padding: 70mm 20mm 18mm; background: var(--sd-c-primary); color: var(--sd-c-bg); }
+.sd-cover-band .sd-cover-main .sd-title { color: var(--sd-c-bg); }
+.sd-cover-band .sd-cover-main .sd-subtitle { color: color-mix(in srgb, var(--sd-c-bg) 80%, transparent); }
+.sd-cover-band .sd-cover-main::after { content: ""; display: block; width: 26mm; height: 2mm; margin-top: 10mm; background: var(--sd-c-accent); }
+.sd-cover-band .sd-cover-foot { margin-top: auto; padding: 0 20mm 20mm; }
+.sd-cover-band .sd-eyebrow { position: absolute; top: 20mm; left: 20mm; color: var(--sd-c-bg); z-index: 1; }
+.sd-cover-full, .sd-cover-custom.sd-bg-primary { background: var(--sd-c-primary); color: var(--sd-c-bg); }
+.sd-cover-full .sd-title { color: var(--sd-c-bg); }
+.sd-cover-full .sd-subtitle, .sd-cover-full .sd-cover-foot { color: color-mix(in srgb, var(--sd-c-bg) 75%, transparent); }
+.sd-cover-full .sd-eyebrow { color: var(--sd-c-accent); }
+.sd-cover-full .sd-cover-main { margin-top: auto; margin-bottom: 18mm; }
+.sd-cover-full .sd-cover-main::before { content: ""; display: block; width: 18mm; height: 18mm; margin-bottom: 12mm; background: var(--sd-c-accent); }
+.sd-cover-split { display: grid; grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; }
+.sd-cover-split .sd-cover-main { border-top: 6px solid var(--sd-c-primary); padding-top: 8mm; margin-top: 60mm; align-self: start; }
+.sd-cover-split .sd-title { font-size: calc(var(--sd-h1) * 2); letter-spacing: -.04em; }
+.sd-cover-split .sd-cover-foot { border-top: 1px solid var(--sd-c-primary); padding-top: 3mm; color: var(--sd-c-text); }
+.sd-cover-custom { justify-content: center; }
+.sd-cover-custom :is(h1,h2) { color: inherit; }
+
+/* Sommaire paginé */
+.sd-toc-page { break-after: page; }
+.sd-toc-print .sd-toc-title { font-family: var(--sd-font-heading); font-size: var(--sd-h2); font-weight: var(--sd-w-heading); text-transform: none; letter-spacing: var(--sd-track-heading); color: var(--sd-c-primary); margin: 0 0 1.2em; }
+.sd-toc-print a { display: flex; align-items: baseline; gap: .5em; padding: .2em 0; color: var(--sd-c-text); text-decoration: none; }
+.sd-toc-print .sd-toc-l1 a { font-weight: 600; padding-top: .55em; }
+.sd-toc-print .sd-toc-l2 a { padding-left: 1.8em; font-size: .95em; }
+.sd-toc-print .sd-toc-text { flex: 0 1 auto; }
+.sd-toc-print .sd-toc-dots { flex: 1; min-width: 2em; border-bottom: 1px dotted color-mix(in srgb, var(--sd-c-muted) 60%, transparent); transform: translateY(-.3em); }
+.sd-toc-print a::after { content: target-counter(attr(href url), page); color: var(--sd-c-muted); font-variant-numeric: tabular-nums; min-width: 1.6em; text-align: right; }
+
+/* Aperçu à l'écran : pages posées sur un fond neutre */
+@media screen {
+  html { background: #e7e8ea; }
+  .sd-print { background: transparent; }
+  .pagedjs_pages { display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 24px 0 48px; }
+  .pagedjs_page { background: var(--sd-c-bg); box-shadow: 0 1px 3px rgba(0,0,0,.12), 0 6px 24px rgba(0,0,0,.08); }
+  .sd-overflowing { outline: 2px dashed #e5484d; outline-offset: 2px; }
+  body:not(.sd-paged) .sd-print-loading { display: flex; }
+}
+.pagedjs_page { --sd-print-bg: var(--sd-c-bg); }
+@media print { html, body { background: none; } }

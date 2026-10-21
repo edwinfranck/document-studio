@@ -1,0 +1,9 @@
+node_modules/
+apps/studio/dist/
+# générés par packages/engine/scripts/collect-fonts.mjs
+packages/engine/fonts/
+packages/engine/src/assets.gen.ts
+# copiés par apps/studio/scripts/copy-static.mjs
+apps/studio/public/fonts/
+apps/studio/public/vendor/
+.vercel

@@ -1,0 +1,28 @@
+{
+  "name": "document-studio",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "fonts": "node packages/engine/scripts/collect-fonts.mjs",
+    "dev": "pnpm fonts && concurrently -n server,ui \"pnpm --filter @studio/server dev\" \"pnpm --filter @studio/app dev\"",
+    "build": "pnpm fonts && pnpm --filter @studio/app build",
+    "start": "pnpm build && pnpm --filter @studio/server start",
+    "test": "pnpm --filter @studio/engine test && pnpm --filter @studio/server test",
+    "typecheck": "pnpm -r typecheck",
+    "test:update-snapshots": "STUDIO_UPDATE_SNAPSHOTS=1 pnpm --filter @studio/server test",
+    "studio": "node apps/server/bin/studio.mjs",
+    "docs": "tsx scripts/gen-docs.mts",
+    "build:web": "pnpm fonts && pnpm --filter @studio/app build"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.6.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "packageManager": "pnpm@10.33.0"
+}

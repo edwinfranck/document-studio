@@ -1,0 +1,14 @@
+/* Coloration syntaxique : couleurs dérivées du thème (sémantiques mêlées au texte du code),
+   lisibles sur fond clair comme sur fond sombre. */
+.hljs-comment, .hljs-quote { color: color-mix(in srgb, var(--sd-c-code-text) 50%, var(--sd-c-code-bg)); font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-built_in, .hljs-type { color: color-mix(in srgb, var(--sd-c-info) 72%, var(--sd-c-code-text)); }
+.hljs-keyword { font-weight: 600; }
+.hljs-string, .hljs-regexp, .hljs-addition, .hljs-attribute, .hljs-template-tag, .hljs-template-variable { color: color-mix(in srgb, var(--sd-c-success) 75%, var(--sd-c-code-text)); }
+.hljs-number, .hljs-symbol, .hljs-bullet, .hljs-link, .hljs-meta { color: color-mix(in srgb, var(--sd-c-warning) 75%, var(--sd-c-code-text)); }
+.hljs-title, .hljs-section, .hljs-title.function_, .hljs-name { color: color-mix(in srgb, var(--sd-c-accent) 75%, var(--sd-c-code-text)); font-weight: 600; }
+.hljs-attr, .hljs-variable, .hljs-params, .hljs-property { color: color-mix(in srgb, var(--sd-c-code-text) 80%, var(--sd-c-info)); }
+.hljs-deletion { color: color-mix(in srgb, var(--sd-c-danger) 80%, var(--sd-c-code-text)); }
+.hljs-addition { background: color-mix(in srgb, var(--sd-c-success) 12%, transparent); }
+.hljs-deletion { background: color-mix(in srgb, var(--sd-c-danger) 12%, transparent); }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 700; }
