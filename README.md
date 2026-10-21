@@ -4,7 +4,7 @@ Des fichiers Markdown vers des documents soignés : **page de lecture HTML**, **
 
 *Turn plain Markdown into a polished reading page, a paginated PDF or an HTML slide deck, from the same source. 12 templates, live preview, a Markdown extension for layout components (StudioMD). French UI. MIT.*
 
-**Essayer en ligne : https://document-studio.vercel.app** (édition web, voir plus bas)
+**Essayer en ligne : https://document-studio-gules.vercel.app** (édition web, voir plus bas)
 
 ## Deux éditions
 
