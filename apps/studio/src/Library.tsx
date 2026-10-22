@@ -1,10 +1,10 @@
-// Bibliothèque : documents, collections, import (bouton ou glisser-déposer), création.
+// Bibliothèque : documents, collections, import (bouton, glisser-déposer ou coller), création.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, Clock, Copy, FilePlus2, FileText, Folder, FolderInput, Layers, Pencil, Presentation, Printer, Search, Sparkles, Trash2, Upload } from 'lucide-react';
+import { BookOpen, ClipboardPaste, Clock, Copy, FilePlus2, FileText, Folder, FolderInput, Layers, Pencil, Presentation, Printer, Search, Sparkles, Trash2, Upload } from 'lucide-react';
 import { parse } from '@studio/engine';
 import { api, type DocSummary } from './api.ts';
 import { useStudio } from './store.ts';
-import { fmtDate } from './ui.tsx';
+import { Modal, fmtDate } from './ui.tsx';
 import { EXAMPLES } from './examples.ts';
 
 const MODE_ICON = { reading: BookOpen, print: Printer, slides: Presentation } as const;
@@ -16,6 +16,7 @@ export function Library({ onOpen }: { onOpen: (id: string) => void }) {
   const [filter, setFilter] = useState<string>('all');
   const [q, setQ] = useState('');
   const [drag, setDrag] = useState(false);
+  const [pasting, setPasting] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
 
   const load = () => api.list().then(d => { setDocs(d); setError(''); }, e => setError(e.message));
@@ -76,6 +77,33 @@ export function Library({ onOpen }: { onOpen: (id: string) => void }) {
     try { const d = await api.create({ name: name || 'Sans titre', project: currentProject, markdown, settings }); onOpen(d.id); }
     catch (e: any) { toast(e.message, 'error'); }
   };
+  /** Crée un document à partir d'un texte collé ; le titre vient du front matter ou du premier titre. */
+  const createFromText = (text: string) => {
+    const md = text.replace(/\r\n?/g, '\n');
+    if (!md.trim()) { toast('Le presse-papiers est vide.', 'error'); return; }
+    const title = parse(md).meta.title;
+    return create(md, title ? String(title).slice(0, 120) : 'Texte collé');
+  };
+  const openPaste = async () => {
+    // Pré-remplit avec le presse-papiers quand le navigateur l'autorise ; sinon, champ vide où coller.
+    let text = '';
+    try { text = await navigator.clipboard.readText(); } catch { /* lecture refusée */ }
+    setPasting(text);
+  };
+
+  // Ctrl+V sur la bibliothèque (hors champ de saisie) : le texte collé devient un document.
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      if (pasting !== null || (e.target as HTMLElement).closest?.('input, textarea, [contenteditable]')) return;
+      const text = e.clipboardData?.getData('text/plain') || '';
+      if (!text.trim()) return;
+      e.preventDefault();
+      createFromText(text);
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  });
+
   const act = async (fn: () => Promise<unknown>, msg?: string) => { try { await fn(); await load(); if (msg) toast(msg); } catch (e: any) { toast(e.message, 'error'); } };
   const tplName = (id: string) => templates.find(t => t.id === id)?.name || id;
 
@@ -103,6 +131,7 @@ export function Library({ onOpen }: { onOpen: (id: string) => void }) {
             <h1>{filter === 'all' ? 'Documents' : filter === 'recent' ? 'Cette semaine' : currentProject}</h1>
             <div className="search"><Search /><input className="input" placeholder="Rechercher" value={q} onChange={e => setQ(e.target.value)} aria-label="Rechercher un document" /></div>
             <div className="grow" />
+            <button className="btn" onClick={openPaste} title="Créer un document à partir de Markdown collé (ou Ctrl+V sur cette page)"><ClipboardPaste />Coller</button>
             <button className="btn" onClick={() => input.current?.click()}><Upload />Importer</button>
             <input ref={input} type="file" multiple hidden accept=".md,.markdown,.mdx,.txt,.json,image/*,video/mp4,video/webm" onChange={e => { importFiles([...(e.target.files || [])]); e.target.value = ''; }} />
             <button className="btn primary" onClick={() => create()}><FilePlus2 />Nouveau</button>
@@ -114,9 +143,10 @@ export function Library({ onOpen }: { onOpen: (id: string) => void }) {
               <div className="empty">
                 <FileText className="big" />
                 <h2>Aucun document</h2>
-                <p>Importez un fichier Markdown, ou partez d'un exemple.</p>
+                <p>Importez un fichier Markdown, collez-en le contenu (Ctrl+V), ou partez d'un exemple.</p>
                 <div className="starter">
                   <button onClick={() => input.current?.click()}><Upload /><strong>Importer un .md</strong><span>Le fichier d'origine reste intact.</span></button>
+                  <button onClick={openPaste}><ClipboardPaste /><strong>Coller du Markdown</strong><span>Ou Ctrl+V directement sur cette page.</span></button>
                   <button onClick={() => create(EXAMPLES.guide, 'Guide StudioMD', { templateId: 'technique' })}><Sparkles /><strong>Guide StudioMD</strong><span>Tous les composants, en un document.</span></button>
                   <button onClick={() => create(EXAMPLES.deck, 'Présentation exemple', { mode: 'slides', templateId: 'cinema' })}><Presentation /><strong>Présentation</strong><span>Un diaporama prêt à adapter.</span></button>
                 </div>
@@ -159,6 +189,16 @@ export function Library({ onOpen }: { onOpen: (id: string) => void }) {
           </div>
         </main>
       </div>
+      {pasting !== null && (
+        <Modal title="Coller du Markdown" onClose={() => setPasting(null)}
+          footer={<><button className="btn" onClick={() => setPasting(null)}>Annuler</button><button className="btn primary" disabled={!pasting.trim()} onClick={() => { const t = pasting; setPasting(null); createFromText(t); }}><FilePlus2 />Créer le document</button></>}>
+          <textarea className="input" autoFocus rows={16} spellCheck={false} value={pasting} placeholder={'# Titre\n\nCollez ici votre Markdown (Ctrl+V).'}
+            onChange={e => setPasting(e.target.value)}
+            onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && pasting.trim()) { const t = pasting; setPasting(null); createFromText(t); } }}
+            style={{ width: '100%', minHeight: 320 }} />
+          <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>Le titre vient du front matter ou du premier titre « # ». Ctrl+Entrée pour créer.</div>
+        </Modal>
+      )}
       {drag && <div className="dropzone">Déposez vos fichiers .md (et leurs images) pour les importer</div>}
     </div>
   );

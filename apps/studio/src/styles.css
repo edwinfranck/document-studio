@@ -342,7 +342,7 @@ textarea.input { height: auto; padding: 6px 8px; resize: vertical; font-family: 
 .empty svg.big { width: 40px; height: 40px; color: var(--text-3); }
 .empty h2 { margin: 0; font-size: 16px; color: var(--text); }
 .dropzone { position: fixed; inset: 0; z-index: 70; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--accent) 12%, rgba(255,255,255,.7)); border: 3px dashed var(--accent); font-size: 18px; font-weight: 600; color: var(--accent); pointer-events: none; }
-.starter { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; max-width: 760px; width: 100%; margin-top: 8px; }
+.starter { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; max-width: 960px; width: 100%; margin-top: 8px; }
 .starter button { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); cursor: pointer; text-align: left; }
 .starter button:hover { border-color: var(--line-strong); box-shadow: 0 4px 14px rgba(0,0,0,.06); }
 .starter button svg { width: 18px; height: 18px; color: var(--accent); }
