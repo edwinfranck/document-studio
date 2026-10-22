@@ -17,6 +17,9 @@ import { Menu, Modal, Resizer, Segmented, fmtDate, fmtSize, usePersisted } from 
 
 const PAGE_W: Record<string, [number, number]> = { A4: [210, 297], A3: [297, 420], A5: [148, 210], Letter: [215.9, 279.4], Legal: [215.9, 355.6] };
 
+/** Document vierge : vide, ou seulement le titre « # … » d'un nouveau document. */
+const isBlank = (md: string) => /^\s*(#[^\n]*)?\s*$/.test(md);
+
 function useDebounced<T>(value: T, ms: number): T {
   const [v, setV] = useState(value);
   useEffect(() => { const t = setTimeout(() => setV(value), ms); return () => clearTimeout(t); }, [value, ms]);
@@ -72,6 +75,36 @@ export function Workspace({ onBack }: { onBack: () => void }) {
     viewRef.current = view;
     return () => { view.destroy(); viewRef.current = null; };
   }, [doc?.id, leftOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Document vierge : la source s'ouvre, texte sélectionné, prête à recevoir un collage.
+  useEffect(() => {
+    if (!doc || !isBlank(useStudio.getState().markdown)) return;
+    setLeftOpen(true);
+    setLeftTab('source');
+    setTimeout(() => { const v = viewRef.current; if (v) { v.dispatch({ selection: { anchor: 0, head: v.state.doc.length } }); v.focus(); } }, 60);
+  }, [doc?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Ctrl+V hors de l'éditeur : le texte va dans la source (il remplace un document encore vierge).
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const t = e.target as HTMLElement;
+      if (t.closest?.('.cm-editor, input, textarea, [contenteditable], .backdrop')) return;
+      const text = e.clipboardData?.getData('text/plain') || '';
+      if (!text.trim()) return;
+      e.preventDefault();
+      setLeftOpen(true);
+      setLeftTab('source');
+      setTimeout(() => {
+        const v = viewRef.current;
+        if (!v) return;
+        if (isBlank(v.state.doc.toString())) replaceAll(v, text.replace(/\r\n?/g, '\n'));
+        else insertAt(v, v.state.selection.main.head, text);
+        v.focus();
+      }, 60);
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { if (viewRef.current && result) setLint(viewRef.current, result.diagnostics); }, [result]);
 

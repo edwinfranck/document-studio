@@ -1,6 +1,6 @@
 // Éditeur source : CodeMirror 6, Markdown + StudioMD (décorations, complétion, diagnostics).
 import { EditorState, RangeSetBuilder, type Extension } from '@codemirror/state';
-import { Decoration, EditorView, ViewPlugin, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, dropCursor, type ViewUpdate, type DecorationSet } from '@codemirror/view';
+import { Decoration, EditorView, ViewPlugin, keymap, placeholder, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, dropCursor, type ViewUpdate, type DecorationSet } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab, undo, redo, undoDepth, isolateHistory } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
@@ -121,6 +121,7 @@ export function createEditor(parent: HTMLElement, doc: string, hooks: EditorHook
     search({ top: true }),
     keymap.of([indentWithTab, ...searchKeymap, ...historyKeymap, ...defaultKeymap]),
     EditorView.lineWrapping,
+    placeholder('Collez ou écrivez votre Markdown ici…'),
     EditorView.contentAttributes.of({ spellcheck: 'true', lang: 'fr', 'aria-label': 'Source Markdown' }),
     EditorView.updateListener.of(u => {
       if (u.docChanged) {
