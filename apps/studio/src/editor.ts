@@ -7,6 +7,11 @@ import { languages } from '@codemirror/language-data';
 import { HighlightStyle, syntaxHighlighting, bracketMatching, indentOnInput } from '@codemirror/language';
 import { autocompletion, closeBrackets, type CompletionContext, type CompletionResult } from '@codemirror/autocomplete';
 import { search, searchKeymap, highlightSelectionMatches } from '@codemirror/search';
+import { StateEffect, StateField } from '@codemirror/state';
+import { WidgetType } from '@codemirror/view';
+import * as Y from 'yjs';
+import type { Awareness } from 'y-protocols/awareness';
+import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import { lintGutter, setDiagnostics, type Diagnostic as CmDiagnostic } from '@codemirror/lint';
 import { tags as t } from '@lezer/highlight';
 import { BY_NAME, COMPONENTS, type Diagnostic } from '@studio/engine';
@@ -109,27 +114,37 @@ export interface EditorHooks {
   onPasteFiles(files: File[], pos: number): void;
 }
 
-export function createEditor(parent: HTMLElement, doc: string, hooks: EditorHooks): EditorView {
+export interface CollabBinding { text: Y.Text; awareness: Awareness; undo: Y.UndoManager }
+
+export function createEditor(parent: HTMLElement, doc: string, hooks: EditorHooks, opts: { collab?: CollabBinding; readOnly?: boolean } = {}): EditorView {
   let depth = 0;
   let cursorTimer: ReturnType<typeof setTimeout>;
+  const c = opts.collab;
+  if (c) c.undo.on('stack-item-added', (e: any) => { if (e.type === 'undo') hooks.onTextStep(); });
   const ext: Extension[] = [
     lineNumbers(), highlightActiveLineGutter(), highlightActiveLine(), drawSelection(), dropCursor(),
-    history(), indentOnInput(), bracketMatching(), closeBrackets(), highlightSelectionMatches(),
+    // En collaboration, l'annulation ne porte que sur ses propres modifications (Y.UndoManager).
+    c ? [yCollab(c.text, c.awareness, { undoManager: c.undo }), keymap.of(yUndoManagerKeymap)] : history(),
+    EditorState.readOnly.of(!!opts.readOnly), EditorView.editable.of(!opts.readOnly),
+    commentField,
+    indentOnInput(), bracketMatching(), closeBrackets(), highlightSelectionMatches(),
     markdown({ base: markdownLanguage, codeLanguages: languages }),
     syntaxHighlighting(style), directiveLines, lintGutter(),
     autocompletion({ override: [complete], icons: false }),
     search({ top: true }),
-    keymap.of([indentWithTab, ...searchKeymap, ...historyKeymap, ...defaultKeymap]),
+    keymap.of([indentWithTab, ...searchKeymap, ...(c ? [] : historyKeymap), ...defaultKeymap]),
     EditorView.lineWrapping,
     placeholder('Collez ou écrivez votre Markdown ici…'),
     EditorView.contentAttributes.of({ spellcheck: 'true', lang: 'fr', 'aria-label': 'Source Markdown' }),
     EditorView.updateListener.of(u => {
       if (u.docChanged) {
         hooks.onChange(u.state.doc.toString());
-        const d = undoDepth(u.state);
-        const fromHistory = u.transactions.some(tr => tr.isUserEvent('undo') || tr.isUserEvent('redo'));
-        if (d > depth && !fromHistory) hooks.onTextStep();
-        depth = d;
+        if (!c) {
+          const d = undoDepth(u.state);
+          const fromHistory = u.transactions.some(tr => tr.isUserEvent('undo') || tr.isUserEvent('redo'));
+          if (d > depth && !fromHistory) hooks.onTextStep();
+          depth = d;
+        }
       }
       if (u.selectionSet && u.view.hasFocus) {
         clearTimeout(cursorTimer);
@@ -204,3 +219,39 @@ export function rewriteOpener(view: EditorView, line: number, name: string, attr
   view.dispatch({ changes: { from: l.from, to: l.to, insert: text } });
   return true;
 }
+
+/* ---------- Passages commentés et suggestions ---------- */
+
+export interface CommentRange { id: string; from: number; to: number; kind: 'comment' | 'suggestion'; replacement?: string; active: boolean }
+export const setComments = StateEffect.define<CommentRange[]>();
+
+class SuggestionWidget extends WidgetType {
+  constructor(readonly text: string) { super(); }
+  eq(o: SuggestionWidget) { return o.text === this.text; }
+  toDOM() {
+    const s = document.createElement('span');
+    s.className = 'cm-suggest-ins';
+    s.textContent = this.text;
+    return s;
+  }
+}
+
+const commentField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(deco, tr) {
+    deco = deco.map(tr.changes);
+    for (const e of tr.effects) if (e.is(setComments)) {
+      const len = tr.state.doc.length;
+      const ranges = e.value.filter(r => r.from >= 0 && r.to <= len && r.from <= r.to).sort((a, b) => a.from - b.from || a.to - b.to);
+      const b = new RangeSetBuilder<Decoration>();
+      for (const r of ranges) {
+        const cls = r.kind === 'suggestion' ? 'cm-suggest-del' : 'cm-comment';
+        if (r.to > r.from) b.add(r.from, r.to, Decoration.mark({ class: cls + (r.active ? ' active' : ''), attributes: { 'data-comment': r.id } }));
+        if (r.kind === 'suggestion' && r.replacement) b.add(r.to, r.to, Decoration.widget({ widget: new SuggestionWidget(r.replacement), side: 1 }));
+      }
+      deco = b.finish();
+    }
+    return deco;
+  },
+  provide: f => EditorView.decorations.from(f),
+});

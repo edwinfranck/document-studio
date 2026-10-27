@@ -1,7 +1,7 @@
 // Panneau de propriétés : réglages du document et de l'élément sélectionné, selon le mode de sortie.
 import { useRef } from 'react';
 import {
-  Blocks, Braces, Download, FileText, Image as ImageIcon, LayoutTemplate, Palette, PanelTop, Plus, RotateCcw, Ruler, Save, Type, Upload,
+  Blocks, Braces, Columns2, Download, Library, FileText, Image as ImageIcon, LayoutTemplate, Palette, PanelTop, Plus, RotateCcw, Ruler, Save, Type, Upload,
 } from 'lucide-react';
 import {
   COMPONENTS, BY_NAME, FONT_FAMILIES, contrastReport, merge, resolveTheme, type ComponentNode, type DocSettings, type PageSettings,
@@ -13,6 +13,8 @@ import { ColorField, Field, Range, Section, Segmented, Select, Toggle, type Opti
 
 interface Props {
   selected: ComponentNode | null;
+  onCompare?: () => void;
+  blocksNode?: import('react').ReactNode;
   onInsert(text: string): void;
   onEditComponent(c: ComponentNode, attrs: Record<string, string | true>): void;
   onOpenGallery(): void;
@@ -52,7 +54,7 @@ const setPath = (obj: any, path: string[], value: unknown): any => {
   return { ...(obj || {}), [k]: rest.length ? setPath(obj?.[k], rest, value) : value };
 };
 
-export function Inspector({ selected, onInsert, onEditComponent, onOpenGallery, onExport }: Props) {
+export function Inspector({ selected, onInsert, onEditComponent, onOpenGallery, onExport, onCompare, blocksNode }: Props) {
   const { settings, setSettings, templates, doc, loadTemplates, toast } = useStudio();
   const resolved = resolveTheme(settings, templates);
   const t = resolved.tokens;
@@ -135,6 +137,7 @@ export function Inspector({ selected, onInsert, onEditComponent, onOpenGallery, 
             <button className="btn sm ghost" onClick={() => setSettings(s => ({ ...s, overrides: {} }))}><RotateCcw />Réinitialiser</button>
           </div>
         )}
+        {onCompare && <button className="btn sm" onClick={onCompare}><Columns2 />Comparer deux gabarits</button>}
         <div className="row">
           <button className="btn sm grow" onClick={saveAsTemplate} title="Enregistre ces réglages comme un nouveau gabarit, sans modifier l'original"><Save />Enregistrer comme gabarit</button>
         </div>
@@ -246,6 +249,12 @@ export function Inspector({ selected, onInsert, onEditComponent, onOpenGallery, 
         <div className="token-help">Cliquez un bloc dans l'aperçu pour régler ses attributs. Tapez <code>:::</code> dans la source pour la complétion.</div>
         <ComponentLibrary onInsert={onInsert} mode={mode} />
       </Section>
+
+ {blocksNode && (
+        <Section id="blocks" icon={<Library />} title="Blocs réutilisables">
+          {blocksNode}
+        </Section>
+      )}
 
       <Section id="media" icon={<ImageIcon />} title="Images et médias">
         <Field label="Alignement"><Segmented full value={t.layout.imageAlign} onChange={v => tok('layout.imageAlign', v)} options={[['center', 'Centré'], ['left', 'Gauche'], ['full', 'Pleine larg.']]} /></Field>

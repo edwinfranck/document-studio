@@ -130,7 +130,7 @@ export function browserBackend(): Backend {
   const userThemes = () => getAll<Template>('themes');
   const allTemplates = async () => [...BUILTIN_TEMPLATES, ...(await userThemes())];
   const self: Backend = {
-    kind: 'browser', home: 'ce navigateur', pdf: 'print-dialog',
+    kind: 'browser', home: 'ce navigateur', pdf: 'print-dialog', collab: false,
     async list() {
       const all = await getAll<DocRecord>('docs');
       return all.map<DocSummary>(r => ({ id: r.id, name: r.name, project: r.project, mode: r.settings.mode || 'reading', templateId: r.settings.templateId || 'corporate', createdAt: r.createdAt, updatedAt: r.updatedAt, words: words(r.markdown), size: r.markdown.length }))

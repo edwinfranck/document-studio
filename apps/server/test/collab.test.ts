@@ -340,3 +340,15 @@ describe('suppression', () => {
     expect(existsSync(join(HOME, 'documents', docId))).toBe(false);
   });
 });
+
+describe('confidentialité', () => {
+  it('les adresses e-mail ne sont visibles que du propriétaire', async () => {
+    const d = (await edwin.post('/api/docs', { name: 'Confidentiel' })).data;
+    await edwin.post(`/api/docs/${d.id}/members`, { email: 'awa@test.dev', role: 'editor' });
+    const seenByAwa = (await awa.get(`/api/docs/${d.id}`)).data.members;
+    expect(seenByAwa.every((m: any) => !m.user.email)).toBe(true);
+    const seenByOwner = (await edwin.get(`/api/docs/${d.id}`)).data.members;
+    expect(seenByOwner.some((m: any) => m.user.email === 'awa@test.dev')).toBe(true);
+    expect((await awa.get('/api/users?q=')).data.every((u: any) => !('email' in u))).toBe(true);
+  });
+});

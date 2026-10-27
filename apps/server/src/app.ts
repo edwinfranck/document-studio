@@ -110,10 +110,14 @@ function exportInput(id: string, actor: string, over: { settings?: Partial<DocSe
   return { markdown: over.markdown ?? d.markdown, settings: over.settings ?? d.settings, dir: S.docDir(id), name: S.readMeta(id).name, themes: S.listThemes(), blocks: blockResolver(actor) };
 }
 
-const members = (m: S.DocMetaFile) => [
+/** Membres d'un document. Les adresses e-mail ne sont montrées qu'au propriétaire (fenêtre de partage). */
+const members = (m: S.DocMetaFile, withEmail = false) => [
   ...(m.owner ? [{ userId: m.owner, role: 'owner' as Role }] : []),
   ...(m.members || []),
-].map(x => ({ ...x, user: A.userById(x.userId) ? A.pub(A.userById(x.userId)!) : null }));
+].map(x => {
+  const u = A.userById(x.userId);
+  return { ...x, user: u ? { ...A.pub(u), email: withEmail ? u.email : '' } : null };
+});
 
 function notifyMembers(id: string, actor: string, text: string, type: string, only?: string[]) {
   const m = S.readMeta(id);
@@ -128,7 +132,7 @@ function publicDoc(c: Ctx, id: string, role: Role) {
   const latest = S.latestVersion(id);
   return {
     ...d, markdown: cur.markdown, settings: cur.settings, role,
-    members: members(m),
+    members: members(m, can(role, 'share')),
     links: can(role, 'share') ? m.links : undefined,
     invites: can(role, 'share') ? m.invites : undefined,
     publications: (m.publications || []).map(p => ({ ...p, stale: !!latest && p.version < latest.n && S.readVersion(id, p.version).markdown !== cur.markdown })),
@@ -182,7 +186,8 @@ route('PUT', '/api/auth/me', async c => json(c.res, { me: A.updateProfile(needUs
 route('GET', '/api/users', c => {
   needUser(c);
   const q = (c.url.searchParams.get('q') || '').toLowerCase();
-  json(c.res, A.allUsers().filter(u => !q || u.name.toLowerCase().includes(q) || u.email.includes(q)).slice(0, 20));
+  // Recherche par nom ou adresse exacte : on ne divulgue jamais la liste des adresses.
+  json(c.res, A.allUsers().filter(u => !q || u.name.toLowerCase().includes(q) || u.email === q).slice(0, 20).map(u => ({ id: u.id, name: u.name, color: u.color })));
 });
 const secure = (req: IncomingMessage) => req.headers['x-forwarded-proto'] === 'https';
 

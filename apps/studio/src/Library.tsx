@@ -1,8 +1,10 @@
 // Bibliothèque : documents, collections, import (bouton, glisser-déposer ou coller), création.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, ClipboardPaste, Clock, Copy, FilePlus2, FileText, Folder, FolderInput, Layers, Pencil, Presentation, Printer, Search, Sparkles, Trash2, Upload } from 'lucide-react';
+import { BookOpen, Users, LogOut, ClipboardPaste, Clock, Copy, FilePlus2, FileText, Folder, FolderInput, Layers, Pencil, Presentation, Printer, Search, Sparkles, Trash2, Upload } from 'lucide-react';
 import { parse } from '@studio/engine';
-import { api, type DocSummary } from './api.ts';
+import { api, collab, type DocSummary } from './api.ts';
+import { Avatar, NotificationsBell } from './CollabPanels.tsx';
+import { Menu } from './ui.tsx';
 import { useStudio } from './store.ts';
 import { Modal, fmtDate } from './ui.tsx';
 import { EXAMPLES } from './examples.ts';
@@ -10,7 +12,7 @@ import { EXAMPLES } from './examples.ts';
 const MODE_ICON = { reading: BookOpen, print: Printer, slides: Presentation } as const;
 
 export function Library({ onOpen }: { onOpen: (id: string) => void }) {
-  const { templates, toast } = useStudio();
+  const { templates, toast, me } = useStudio();
   const [docs, setDocs] = useState<DocSummary[] | null>(null);
   const [error, setError] = useState('');
   const [filter, setFilter] = useState<string>('all');
@@ -44,7 +46,7 @@ export function Library({ onOpen }: { onOpen: (id: string) => void }) {
     const nq = norm(q.trim());
     const week = Date.now() - 7 * 86400e3;
     return (docs || []).filter(d =>
-      (filter === 'all' || (filter === 'recent' && new Date(d.updatedAt).getTime() > week) || (currentProject && d.project === currentProject)) &&
+      (filter === 'all' || (filter === 'recent' && new Date(d.updatedAt).getTime() > week) || (filter === 'shared' && (d as any).role !== 'owner') || (currentProject && d.project === currentProject)) &&
       (!nq || norm(d.name + ' ' + d.project).includes(nq)));
   }, [docs, filter, q, currentProject]);
 
@@ -116,19 +118,29 @@ export function Library({ onOpen }: { onOpen: (id: string) => void }) {
         </div>
         <div className="grow" />
         <span className="faint hide-sm" style={{ fontSize: 12 }}>{api.backend.kind === 'browser' ? 'Édition web · documents enregistrés dans ce navigateur · ' : ''}Glissez des fichiers .md n'importe où pour les importer</span>
-        <a className="btn ghost sm" href="https://github.com/edwinfranck/document-studio" target="_blank" rel="noopener noreferrer">GitHub</a>
+        <a className="btn ghost sm hide-sm" href="https://github.com/edwinfranck/document-studio" target="_blank" rel="noopener noreferrer">GitHub</a>
+        <NotificationsBell />
+        {me && (
+          <Menu trigger={t => <button className="btn ghost icon" onClick={t} aria-label="Compte"><Avatar name={me.name} color={me.color} size={26} /></button>}>
+            {close => <>
+              <div className="menu-title">{me.name} · {me.email}</div>
+              <button onClick={() => { close(); collab.logout().then(() => location.reload()); }}><LogOut /><span>Se déconnecter</span></button>
+            </>}
+          </Menu>
+        )}
       </header>
       <div className="library">
         <nav className="lib-side" aria-label="Collections">
           <button aria-pressed={filter === 'all'} onClick={() => setFilter('all')}><Layers />Tous les documents<span className="n">{docs?.length ?? ''}</span></button>
           <button aria-pressed={filter === 'recent'} onClick={() => setFilter('recent')}><Clock />Cette semaine</button>
+          {api.backend.collab && <button aria-pressed={filter === 'shared'} onClick={() => setFilter('shared')}><Users />Partagés avec moi<span className="n">{docs?.filter(d => (d as any).role && (d as any).role !== 'owner').length || ''}</span></button>}
           <div className="subhead">Collections</div>
           {projects.length === 0 && <div className="faint" style={{ padding: '0 10px', fontSize: 12 }}>Aucune. Rangez un document via « Déplacer ».</div>}
           {projects.map(([p, n]) => <button key={p} aria-pressed={filter === 'p:' + p} onClick={() => setFilter('p:' + p)}><Folder />{p}<span className="n">{n}</span></button>)}
         </nav>
         <main className="lib-main">
           <div className="lib-toolbar">
-            <h1>{filter === 'all' ? 'Documents' : filter === 'recent' ? 'Cette semaine' : currentProject}</h1>
+            <h1>{filter === 'all' ? 'Documents' : filter === 'recent' ? 'Cette semaine' : filter === 'shared' ? 'Partagés avec moi' : currentProject}</h1>
             <div className="search"><Search /><input className="input" placeholder="Rechercher" value={q} onChange={e => setQ(e.target.value)} aria-label="Rechercher un document" /></div>
             <div className="grow" />
             <button className="btn" onClick={openPaste} title="Créer un document à partir de Markdown collé (ou Ctrl+V sur cette page)"><ClipboardPaste />Coller</button>
@@ -161,7 +173,7 @@ export function Library({ onOpen }: { onOpen: (id: string) => void }) {
                       const Icon = MODE_ICON[d.mode as keyof typeof MODE_ICON] || FileText;
                       return (
                         <tr key={d.id} className="doc" onClick={() => onOpen(d.id)} tabIndex={0} onKeyDown={e => e.key === 'Enter' && onOpen(d.id)}>
-                          <td><div className="dname"><span className="doc-icon"><Icon /></span>{d.name}</div></td>
+                          <td><div className="dname"><span className="doc-icon"><Icon /></span><span className="grow">{d.name}</span>{(d as any).role && (d as any).role !== 'owner' && <span className="badge">{({ viewer: 'lecture', commenter: 'commentaire', editor: 'édition' } as Record<string, string>)[(d as any).role]}</span>}{(d as any).shared && (d as any).role === 'owner' && <Users size={14} className="faint" aria-label="partagé" />}</div></td>
                           <td className="hide-sm muted">{d.project || '—'}</td>
                           <td className="hide-sm muted">{tplName(d.templateId)}</td>
                           <td className="muted">{fmtDate(d.updatedAt)}</td>

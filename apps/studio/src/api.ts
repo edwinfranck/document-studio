@@ -6,12 +6,36 @@ import type { DocSettings, Template } from '@studio/engine';
 
 export interface DocSummary { id: string; name: string; project: string; mode: string; templateId: string; createdAt: string; updatedAt: string; words: number; size: number }
 export interface Asset { name: string; size: number }
-export interface Doc { id: string; name: string; project: string; settings: Partial<DocSettings>; markdown: string; assets: Asset[]; hasOriginal: boolean; createdAt: string; updatedAt: string; importedFrom?: string }
+export interface Doc extends Partial<Collab> { id: string; name: string; project: string; settings: Partial<DocSettings>; markdown: string; assets: Asset[]; hasOriginal: boolean; createdAt: string; updatedAt: string; importedFrom?: string }
+export type Role = 'viewer' | 'commenter' | 'editor' | 'owner';
+export interface Me { id: string; name: string; email: string; color: string }
+export interface Member { userId: string; role: Role; user: Me | null }
+export interface ShareLink { id: string; token: string; role: Exclude<Role, 'owner'>; label?: string; expiresAt?: string; revoked?: boolean; requireLogin?: boolean; allowDownload: boolean; createdAt: string }
+export interface Publication { id: string; version: number; at: string; by: string; visibility: 'public' | 'members'; revoked?: boolean; label?: string; official: boolean; stale?: boolean }
+export interface Workflow { state: 'draft' | 'review' | 'changes' | 'pending' | 'approved' | 'published' | 'archived'; reviewers: { userId: string; decision: 'pending' | 'approved' | 'changes'; at?: string; note?: string }[]; requiredApprovals: number; approvedVersion?: number }
+export interface VersionInfo { n: number; at: string; authors: string[]; authorNames: string[]; kind: string; label?: string; summary: string; added: number; removed: number; restoredFrom?: number }
+export interface Version extends VersionInfo { markdown: string; settings: Partial<DocSettings> }
+export interface Comment {
+  id: string; kind: 'comment' | 'suggestion'; anchor: { start?: unknown; end?: unknown; quote: string; line: number; slide?: number };
+  body: string; replacement?: string; author: string; authorName: string; at: string;
+  replies: { id: string; author: string; authorName: string; body: string; at: string }[];
+  assignee?: string; mentions: string[]; status: 'open' | 'resolved' | 'accepted' | 'rejected'; decidedBy?: string; decidedAt?: string;
+}
+export interface Activity { at: string; actor: string; actorName: string; type: string; text: string }
+export interface Notification { id: string; at: string; type: string; docId?: string; text: string; read: boolean; link?: string }
+export interface Block { id: string; name: string; description?: string; owner: string; shared: boolean; updatedAt: string; versions: { version: number; markdown: string; at: string }[] }
+export interface Collab {
+  role: Role; members: Member[]; links?: ShareLink[]; invites?: { email: string; role: Role }[]; publications: Publication[];
+  workflow: Workflow; version: number; branchOf?: { docId: string; baseVersion: number; name: string }; owner?: string;
+}
+
 export interface ExportRequest { format: string; mode: string; settings?: Partial<DocSettings>; markdown?: string; pdf?: boolean }
 export interface ExportResult { blob: Blob; name: string; info: any; printed?: boolean }
 
 export interface Backend {
   kind: 'server' | 'browser';
+  /** Comptes, partage, temps réel, commentaires, validation : seulement avec le serveur. */
+  collab: boolean;
   home: string;
   pdf: 'chrome' | 'print-dialog';
   list(): Promise<DocSummary[]>;
@@ -36,8 +60,13 @@ export interface Backend {
   settingsFile(id: string): Promise<{ blob: Blob; name: string }>;
 }
 
+/** Jeton du lien de partage par lequel on est entré (envoyé à chaque requête). */
+export const shareState = { token: '' as string, guestName: '' as string };
+
 async function call<T>(method: string, url: string, body?: unknown, raw = false): Promise<T> {
   const init: RequestInit = { method, headers: {} };
+  if (shareState.token) (init.headers as any)['x-share-token'] = shareState.token;
+  if (shareState.guestName) (init.headers as any)['x-guest-name'] = encodeURIComponent(shareState.guestName);
   if (body instanceof Blob || body instanceof ArrayBuffer) init.body = body as BodyInit;
   else if (body !== undefined) { init.body = JSON.stringify(body); (init.headers as any)['content-type'] = 'application/json'; }
   let res: Response;
@@ -57,7 +86,7 @@ const fileFrom = async (res: Response) => {
 
 function serverBackend(home: string): Backend {
   return {
-    kind: 'server', home, pdf: 'chrome',
+    kind: 'server', home, pdf: 'chrome', collab: true,
     list: () => call('GET', '/api/docs'),
     get: id => call('GET', `/api/docs/${id}`),
     create: d => call('POST', '/api/docs', d),
@@ -83,6 +112,44 @@ function serverBackend(home: string): Backend {
   };
 }
 
+/** Fonctions collaboratives (serveur uniquement). */
+export const collab = {
+  state: () => call<{ hasUsers: boolean; me: Me | null }>('GET', '/api/auth/state'),
+  register: (b: { name: string; email: string; password: string }) => call<{ me: Me }>('POST', '/api/auth/register', b),
+  login: (b: { email: string; password: string }) => call<{ me: Me }>('POST', '/api/auth/login', b),
+  logout: () => call('POST', '/api/auth/logout'),
+  updateMe: (b: { name?: string; color?: string }) => call<{ me: Me }>('PUT', '/api/auth/me', b),
+  users: (q: string) => call<Me[]>('GET', `/api/users?q=${encodeURIComponent(q)}`),
+  share: (token: string) => call<{ docId: string; role: Role; name: string; requireLogin: boolean }>('GET', `/api/share/${token}`),
+  addMember: (id: string, email: string, role: Role) => call<Doc>('POST', `/api/docs/${id}/members`, { email, role }),
+  setMember: (id: string, userId: string, role: Role) => call<Doc>('PATCH', `/api/docs/${id}/members/${encodeURIComponent(userId)}`, { role }),
+  removeMember: (id: string, userId: string) => call<Doc>('DELETE', `/api/docs/${id}/members/${encodeURIComponent(userId)}`),
+  addLink: (id: string, b: { role: string; expiresAt?: string; requireLogin?: boolean; allowDownload?: boolean; label?: string }) => call<Doc>('POST', `/api/docs/${id}/links`, b),
+  patchLink: (id: string, lid: string, b: Record<string, unknown>) => call<Doc>('PATCH', `/api/docs/${id}/links/${lid}`, b),
+  versions: (id: string) => call<VersionInfo[]>('GET', `/api/docs/${id}/versions`),
+  version: (id: string, n: number) => call<Version>('GET', `/api/docs/${id}/versions/${n}`),
+  nameVersion: (id: string, label: string) => call<Version>('POST', `/api/docs/${id}/versions`, { label }),
+  restore: (id: string, n: number) => call<Version>('POST', `/api/docs/${id}/versions/${n}/restore`),
+  activity: (id: string) => call<Activity[]>('GET', `/api/docs/${id}/activity`),
+  comments: (id: string) => call<Comment[]>('GET', `/api/docs/${id}/comments`),
+  addComment: (id: string, b: Record<string, unknown>) => call<Comment>('POST', `/api/docs/${id}/comments`, b),
+  reply: (id: string, cid: string, body: string, mentions: string[]) => call<Comment>('POST', `/api/docs/${id}/comments/${cid}/replies`, { body, mentions }),
+  patchComment: (id: string, cid: string, b: Record<string, unknown>) => call<Comment>('PATCH', `/api/docs/${id}/comments/${cid}`, b),
+  decide: (id: string, cid: string, decision: 'accept' | 'reject') => call<Comment>('POST', `/api/docs/${id}/comments/${cid}/decide`, { decision }),
+  workflow: (id: string, b: Record<string, unknown>) => call<Workflow>('PUT', `/api/docs/${id}/workflow`, b),
+  review: (id: string, decision: 'approved' | 'changes', note?: string) => call<Workflow>('POST', `/api/docs/${id}/review`, { decision, note }),
+  publish: (id: string, b: { official: boolean; visibility: 'public' | 'members'; label?: string }) => call<Publication>('POST', `/api/docs/${id}/publish`, b),
+  unpublish: (id: string, pid: string) => call('POST', `/api/docs/${id}/publications/${pid}/revoke`),
+  branch: (id: string, name: string) => call<Doc>('POST', `/api/docs/${id}/branch`, { name }),
+  mergePreview: (id: string) => call<{ text: string; conflicts: number; main: string; target: string; targetName: string; canMerge: boolean }>('GET', `/api/docs/${id}/merge`),
+  merge: (id: string, text: string) => call<{ version: number }>('POST', `/api/docs/${id}/merge`, { text }),
+  notifications: () => call<Notification[]>('GET', '/api/notifications'),
+  readNotifications: (ids: string[] | 'all') => call('POST', '/api/notifications/read', { ids }),
+  blocks: () => call<Block[]>('GET', '/api/blocks'),
+  saveBlock: (b: { id?: string; name: string; markdown: string; description?: string; shared?: boolean }) => call<Block>('POST', '/api/blocks', b),
+  deleteBlock: (id: string) => call('DELETE', `/api/blocks/${id}`),
+};
+
 let current: Backend | null = null;
 
 /** Détecte le serveur local ; à défaut (site statique), bascule sur le stockage du navigateur. */
@@ -100,7 +167,7 @@ export async function initBackend(): Promise<Backend> {
 const be = () => { if (!current) throw new Error('Stockage non initialisé.'); return current; };
 
 /** Point d'accès unique de l'interface, quel que soit le stockage. */
-export const api: Omit<Backend, 'kind' | 'home' | 'pdf'> & { readonly backend: Backend } = {
+export const api: Omit<Backend, 'kind' | 'home' | 'pdf' | 'collab'> & { readonly backend: Backend } = {
   get backend() { return be(); },
   list: () => be().list(),
   get: id => be().get(id),

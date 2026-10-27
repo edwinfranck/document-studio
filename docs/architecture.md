@@ -77,15 +77,23 @@ Les documents importés sont des données non fiables.
 
 Tests : `tests/fixtures/10-securite.md` et la section « sécurité » de `engine.test.ts`.
 
-## Publication en ligne (non construite)
+## Collaboration
 
-Rien n'est publié en ligne aujourd'hui ; l'interface le dit. Le plan retenu :
+Détail dans [collaboration.md](collaboration.md). En bref :
 
-- `apps/publish-api` : authentification, `Publication` (instantané versionné d'un export, propriétaire, visibilité), `ShareGrant` (destinataire ou lien, expiration), révocation.
-- Stockage objet compatible S3 pour les fichiers ; PostgreSQL pour les droits.
-- Publication explicite d'un **instantané** : modifier le document local ne change pas le lien.
-- Documents privés : droit vérifié côté serveur à chaque lecture ; un identifiant difficile à deviner ne suffit pas.
-- Lecteur web = les exports HTML existants, servis tels quels.
+```
+navigateur : CodeMirror + y-codemirror ─┐                    ┌─ collab.bin (état Yjs) + document.md (miroir)
+             IndexedDB (hors ligne)      ├─ WebSocket /collab ┤  versions/<n>.json, comments.json, activity.jsonl
+             REST /api (droits vérifiés) ┘   (y-protocols)    └─ audit.jsonl (sécurité, séparé)
+```
+
+| Choix | Pourquoi |
+|---|---|
+| Yjs + y-protocols, serveur WebSocket intégré | convergence des modifications concurrentes ; le serveur filtre les écritures selon le rôle |
+| Commentaires en REST, pas dans le document Yjs | un commentateur peut commenter sans pouvoir écrire dans le document partagé |
+| Ancres en positions relatives Yjs + citation | l'ancre suit le texte ; la citation permet de détecter un passage réécrit |
+| Versions distinctes des mises à jour Yjs | l'historique lisible n'est pas le journal technique de synchronisation |
+| Publications = fichiers HTML/PDF figés | un lien publié ne change pas quand le document bouge |
 
 ## Risques connus
 
@@ -95,3 +103,4 @@ Rien n'est publié en ligne aujourd'hui ; l'interface le dit. Le plan retenu :
 | Documents très longs | Rendu de 5 000 lignes < 1 s (testé) ; la pagination Paged.js d'une centaine de pages prend quelques secondes, l'aperçu garde l'ancienne version affichée en attendant |
 | Coupure de tableaux | En-têtes répétés (testé) ; une ligne plus haute qu'une page reste un cas limite |
 | Images distantes | Chargées dans l'aperçu, bloquées dans le PDF (rendu hors réseau) : à télécharger dans les fichiers du document |
+| Serveur unique | Les salons temps réel vivent dans un seul processus : pas de répartition sur plusieurs serveurs |

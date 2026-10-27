@@ -15,11 +15,13 @@ export interface PreviewProps {
   slideSize: [number, number];
   scrollRequest: { line: number; n: number } | null;
   onSelect(line: number): void;
+  /** Mobile : barre d'outils réduite. */
+  compact?: boolean;
 }
 
 type Device = 'full' | 'tablet' | 'mobile';
 
-export function Preview({ html, mode, pageWidthMm, slideSize, scrollRequest, onSelect }: PreviewProps) {
+export function Preview({ html, mode, pageWidthMm, slideSize, scrollRequest, onSelect, compact }: PreviewProps) {
   const frames = [useRef<HTMLIFrameElement>(null), useRef<HTMLIFrameElement>(null)];
   const stageRef = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState(0);
@@ -81,7 +83,7 @@ export function Preview({ html, mode, pageWidthMm, slideSize, scrollRequest, onS
       if (m.type === 'sd:slides') {
         if (isPending && m.index !== slideIdx.current && slideIdx.current < m.count) { win.postMessage({ type: 'sd:goto', index: slideIdx.current }, '*'); }
         if (idx === activeRef.current || isPending) {
-          if (idx === activeRef.current) slideIdx.current = m.index;
+          if (idx === activeRef.current) { slideIdx.current = m.index; useStudio.setState({ currentSlide: m.index }); }
           setInfo({ index: isPending ? Math.min(slideIdx.current, m.count - 1) : m.index, count: m.count, overflows: m.overflows });
           useStudio.setState({ runtime: (m.overflows || []).map((o: { index: number; line: number }) => ({ line: o.line, severity: 'warning', message: `Diapositive ${o.index + 1} : contenu trop long, même réduit à 70 %. Coupez-la en deux.` })) });
         }
@@ -130,7 +132,7 @@ export function Preview({ html, mode, pageWidthMm, slideSize, scrollRequest, onS
             <button className="btn ghost sm" aria-pressed={zoom === 'fit' || (mode === 'reading' && zoom === 1)} onClick={() => setZoom(mode === 'print' ? 'fit' : 1)} title={mode === 'print' ? 'Ajuster à la largeur' : 'Taille réelle'}><Maximize2 />{mode === 'print' ? 'Largeur' : 'Taille réelle'}</button>
           </div>
         )}
-        {mode === 'reading' && (
+        {mode === 'reading' && !compact && (
           <Segmented value={device} onChange={setDevice} options={[['full', <Monitor />, 'Ordinateur'], ['tablet', <Tablet />, 'Tablette (820 px)'], ['mobile', <Smartphone />, 'Mobile (390 px)']]} />
         )}
         {mode === 'slides' && info.count !== undefined && (

@@ -2,6 +2,7 @@
 import { create } from 'zustand';
 import { BUILTIN_TEMPLATES, DEFAULT_SETTINGS, type Diagnostic, type DocSettings, type Template } from '@studio/engine';
 import { api, type Doc } from './api.ts';
+import type { Provider } from './collabClient.ts';
 
 export type SaveState = 'saved' | 'dirty' | 'saving' | 'error';
 export interface Toast { id: number; text: string; kind: 'info' | 'error' }
@@ -19,6 +20,10 @@ interface State {
   runtime: RuntimeIssue[];          // débordements mesurés dans l'aperçu
   selectedLine: number | null;      // bloc sélectionné dans l'aperçu
   toasts: Toast[];
+  /** Connexion temps réel : présente, le texte et les réglages passent par Yjs (pas de sauvegarde par requête). */
+  provider: Provider | null;
+  me: import('./api.ts').Me | null;
+  currentSlide: number;
   // annuler / rétablir : le texte vit dans CodeMirror, les réglages ici.
   undoLog: ('text' | 'settings')[];
   redoLog: ('text' | 'settings')[];
@@ -42,8 +47,8 @@ let lastCoalesceAt = 0;
 let toastId = 0;
 
 async function flush() {
-  const { doc, markdown, settings } = useStudio.getState();
-  if (!doc) return;
+  const { doc, markdown, settings, provider } = useStudio.getState();
+  if (!doc || provider) return;
   useStudio.setState({ save: 'saving' });
   try {
     const r = await api.update(doc.id, { markdown, settings });
@@ -55,6 +60,12 @@ async function flush() {
   }
 }
 function schedule() {
+  const p = useStudio.getState().provider;
+  if (p) {
+    // Lecteurs et commentateurs : changer de vue reste local, rien n'est écrit dans le document partagé.
+    if (p.role === 'editor' || p.role === 'owner') p.meta.set('settings', useStudio.getState().settings);
+    return;
+  }
   useStudio.setState({ save: 'dirty' });
   clearTimeout(timer);
   timer = setTimeout(flush, 700);
@@ -66,11 +77,11 @@ export const useStudio = create<State>((set, get) => {
 
   return {
     doc: null, markdown: '', settings: withDefaults({}), save: 'saved', saveError: '',
-    templates: BUILTIN_TEMPLATES, userTemplates: [], diagnostics: [], runtime: [], selectedLine: null, toasts: [],
+    templates: BUILTIN_TEMPLATES, userTemplates: [], diagnostics: [], runtime: [], selectedLine: null, toasts: [], provider: null, me: null, currentSlide: 0,
     undoLog: [], redoLog: [], settingsPast: [], settingsFuture: [],
     open: doc => set({ doc, markdown: doc.markdown, settings: withDefaults(doc.settings), save: 'saved', undoLog: [], redoLog: [], settingsPast: [], settingsFuture: [], runtime: [], selectedLine: null }),
-    close: () => { clearTimeout(timer); if (get().save === 'dirty') flush(); set({ doc: null }); },
-    setMarkdown: md => { if (md !== get().markdown) { set({ markdown: md }); schedule(); } },
+    close: () => { clearTimeout(timer); if (get().save === 'dirty') flush(); set({ doc: null, provider: null }); },
+    setMarkdown: md => { if (md !== get().markdown) { set({ markdown: md }); if (!get().provider) schedule(); } },
     setSettings: (fn, coalesce) => {
       const prev = get().settings;
       const next = fn(prev);

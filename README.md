@@ -8,12 +8,17 @@ Des fichiers Markdown vers des documents soignés : **page de lecture HTML**, **
 
 ## Deux éditions
 
-| | Édition locale (`pnpm dev`) | Édition web (Vercel) |
+| | Serveur (`pnpm start`) | Édition web (Vercel) |
 |---|---|---|
 | Documents | fichiers ordinaires dans `~/DocumentStudio` | dans le navigateur (IndexedDB), sur cet appareil seulement |
+| Comptes, partage, rôles, liens révocables | oui | non |
+| Édition simultanée, commentaires, suggestions | oui | non |
+| Versions signées, comparaison, validation, publication | oui | historique local seulement |
 | PDF | généré par Chrome, téléchargé directement | boîte d'impression du navigateur : « Enregistrer au format PDF » |
 | HTML, diaporama, paquet ZIP | oui | oui, générés dans la page |
 | CLI `studio export` | oui | non |
+
+La collaboration est décrite dans [docs/collaboration.md](docs/collaboration.md), avec l'hébergement pour une équipe (réseau local ou serveur HTTPS).
 
 L'interface détecte seule le serveur local ; sans lui, elle bascule sur le stockage du navigateur. Aucun document ne quitte l'appareil dans l'édition web.
 
@@ -60,8 +65,14 @@ Coller ou glisser une image dans la source l'ajoute au document et l'insère. An
 | 3. Présentations : découpage auto/manuel, navigation, plein écran, transitions, notes et vue présentateur, ajustement du texte, export HTML/PDF | fait |
 | 4. StudioMD : grammaire, 24 composants, validation, complétion, documentation | fait, testé |
 | 5. Gabarits perso (dupliquer, renommer, supprimer, importer/exporter), collections, paquet ZIP | fait |
-| 5. Publication en ligne de documents (liens, droits, révocation) | **non construit** : conception dans `docs/architecture.md` |
-| Édition web hébergée (stockage navigateur) | fait |
+| A. Responsive : ordinateur (3 panneaux), tablette (panneaux superposés), mobile (une vue, navigation en bas) | fait, vérifié à 390, 1024 et 1600 px |
+| B. Comptes, rôles lecteur / commentateur / éditeur / propriétaire, invitations, liens (expiration, compte exigé, téléchargement), révocation | fait, testé |
+| C. Édition simultanée (Yjs), présences, curseurs, reprise hors ligne, fichier modifié hors de l'application fusionné | fait, testé |
+| D. Versions signées et regroupées, comparaison au mot, restauration non destructive, commentaires ancrés, suggestions, activité | fait, testé |
+| E. Validation éditoriale, publications liées à une version, publications obsolètes signalées, notifications dans l'application | fait, testé |
+| F. Blocs réutilisables versionnés, branches et fusion à trois voies, comparaison de deux gabarits | fait, testé |
+| Notifications par e-mail, commentaires sur une zone de page PDF, espaces d'équipe | **non construit** (voir docs/collaboration.md) |
+| Édition web hébergée (stockage navigateur, sans collaboration) | fait |
 | Application de bureau (Tauri) | non construit : le moteur est prêt à être habillé |
 
 12 gabarits : Éditorial, Documentation technique, Rapport corporate, Rapport de direction, Support pédagogique, Suisse, Académique, Brutaliste, KERNEL, Diapositives minimales, Cinématique, Formation.
@@ -78,7 +89,7 @@ vercel --prod             # la configuration est dans vercel.json
 ## Tests
 
 ```sh
-pnpm test                     # moteur (57) + serveur, exports PDF réels et non-régression visuelle (21)
+pnpm test                     # moteur (67) + serveur (52) : collaboration de bout en bout, exports PDF réels, non-régression visuelle
 pnpm test:update-snapshots    # après un changement voulu d'un gabarit
 pnpm typecheck
 ```
@@ -94,7 +105,8 @@ Corpus dans `tests/fixtures/` : document simple, rapport long, tableaux larges, 
 | `apps/studio/` | interface |
 | `docs/studiomd.md` | grammaire StudioMD |
 | `docs/composants.md` | référence des composants (générée : `pnpm docs`) |
-| `docs/architecture.md` | pipeline, choix, données, sécurité, publication |
+| `docs/architecture.md` | pipeline, choix, données, sécurité |
+| `docs/collaboration.md` | rôles, temps réel, versions, commentaires, validation, publication, hébergement |
 
 ## Licence
 
