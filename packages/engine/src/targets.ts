@@ -192,7 +192,9 @@ ${p.columns === 2 ? '.sd-body{column-count:2;column-gap:8mm}' : ''}`;
 <div class="sd-cover-main"><h1 class="sd-title">${txt(String(meta.title), ctx)}</h1>${meta.subtitle ? `<p class="sd-subtitle">${txt(String(meta.subtitle), ctx)}</p>` : ''}</div>
 <div class="sd-cover-foot">${metaLine(meta, ctx)}</div>`;
     const bg = coverNode && typeof coverNode.attrs.bg === 'string' ? ` sd-bg-${esc(coverNode.attrs.bg)}` : '';
-    cover = `<section class="sd-cover sd-cover-${coverNode ? 'custom' : coverKind}${bg}">${inner}</section>`;
+    // Sans auteur, organisation, date ni version, la couverture n'a rien à montrer en pied de page.
+    const bare = !coverNode && !metaLine(meta, ctx) && !meta.organization ? ' sd-cover-nometa' : '';
+    cover = `<section class="sd-cover sd-cover-${coverNode ? 'custom' : coverKind}${bg}${bare}">${inner}</section>`;
   } else {
     cover = `<header class="sd-doc-head">${meta.organization ? `<div class="sd-eyebrow">${txt(String(meta.organization), ctx)}</div>` : ''}<h1 class="sd-title">${txt(String(meta.title), ctx)}</h1>${meta.subtitle ? `<p class="sd-subtitle">${txt(String(meta.subtitle), ctx)}</p>` : ''}<div class="sd-meta">${metaLine(meta, ctx)}</div></header>`;
   }

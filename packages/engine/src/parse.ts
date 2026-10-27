@@ -220,6 +220,20 @@ export function parse(source: string, opts: ParseOptions = {}): DocumentIR {
     if (!meta.subtitle && next && (next.type === 'blockquote' || next.type === 'paragraph')) {
       const t = textOf(next).trim();
       if (t.length <= 240) { meta.subtitle = t; titleBlocks = 2; }
+    } else if (!meta.subtitle && next?.type === 'heading' && next.depth === 2) {
+      // « ## » juste sous le titre : sous-titre s'il n'ouvre pas une vraie section, c'est-à-dire s'il est suivi
+      // directement d'un autre titre, ou d'un séparateur « --- » avant le titre suivant (en-tête de compte rendu).
+      const rest = blocks.slice(2) as any[];
+      const end = rest.findIndex(b => b.type === 'heading');
+      const zone = end < 0 ? rest : rest.slice(0, end);
+      const t = textOf(next).trim();
+      const numbered = /^\d+[.)]\s/.test(t);
+      const opensSection = end === 0 && rest[0].depth > 2;    // « ## » suivi d'un « ### » : c'est une section
+      if (t.length <= 160 && !numbered && !opensSection && (end === 0 || zone.some(b => b.type === 'thematicBreak'))) {
+        meta.subtitle = t;
+        titleBlocks = 2;
+        headings.splice(1, 1);        // retiré du sommaire comme le titre
+      }
     }
   }
   if (titleBlocks) headings.shift();   // le titre déduit n'entre pas dans le sommaire

@@ -48,6 +48,9 @@
 .sd-cover-band .sd-cover-main .sd-subtitle { color: color-mix(in srgb, var(--sd-c-bg) 80%, transparent); }
 .sd-cover-band .sd-cover-main::after { content: ""; display: block; width: 26mm; height: 2mm; margin-top: 10mm; background: var(--sd-c-accent); }
 .sd-cover-band .sd-cover-foot { margin-top: auto; padding: 0 20mm 20mm; }
+.sd-cover-band.sd-cover-nometa .sd-cover-main { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; padding-bottom: 45mm; }
+.sd-cover-nometa .sd-cover-foot { display: none; }
+.sd-cover-minimal.sd-cover-nometa .sd-cover-main { margin-top: auto; margin-bottom: 45mm; }
 .sd-cover-band .sd-eyebrow { position: absolute; top: 20mm; left: 20mm; color: var(--sd-c-bg); z-index: 1; }
 .sd-cover-full, .sd-cover-custom.sd-bg-primary { background: var(--sd-c-primary); color: var(--sd-c-bg); }
 .sd-cover-full .sd-title { color: var(--sd-c-bg); }

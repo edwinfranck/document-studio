@@ -156,6 +156,19 @@ describe('séparation contenu / présentation', () => {
   });
 });
 
+describe('sous-titre de couverture', () => {
+  it('un ## sous le titre, suivi d\'un séparateur, devient le sous-titre', () => {
+    const ir = parse('# Compte rendu\n## Hub × Cinekita\n\n**Date :** 27 octobre\n\n---\n\n## 1. Contexte\n\nTexte.');
+    expect(ir.meta.subtitle).toBe('Hub × Cinekita');
+    expect(ir.headings.map(h => h.text)).toEqual(['1. Contexte']);
+  });
+  it('un ## qui ouvre une vraie section reste une section', () => {
+    const ir = parse('# Rapport\n## Introduction\n\nTexte.\n\n## Partie 2\n\nTexte.');
+    expect(ir.meta.subtitle).toBeUndefined();
+    expect(ir.headings.map(h => h.text)).toEqual(['Introduction', 'Partie 2']);
+  });
+});
+
 describe('ancres des titres', () => {
   it('un titre qui commence par un chiffre donne un identifiant CSS valide', () => {
     const ir = parse('# Rapport\n\n## 1. Contexte et objectifs\n\n### 2.1. Transformation\n\n## 2026 en chiffres');
