@@ -19,33 +19,34 @@ const hasPdftotext = (() => { try { execFileSync('pdftotext', ['-v'], { stdio: '
 afterAll(() => B.closeBrowser());
 
 describe('stockage local', () => {
-  it('crée, lit, modifie, duplique et supprime un document', () => {
-    const d = S.createDoc({ name: 'Rapport été', markdown: '# Été\n', importedFrom: 'rapport.md' });
+  it('crée, lit, modifie et supprime un document en fichiers ordinaires', () => {
+    const d = S.createDoc({ name: 'Rapport été', markdown: '# Été\n', importedFrom: 'rapport.md' }, 'u1');
     expect(d.id).toMatch(/^rapport-ete-[0-9a-f]{6}$/);
     expect(readFileSync(join(HOME, 'documents', d.id, 'document.md'), 'utf8')).toBe('# Été\n');
-    S.updateDoc(d.id, { markdown: '# Été 2026\n', settings: { templateId: 'editorial' } });
+    S.updateMeta(d.id, { settings: { templateId: 'editorial' }, name: 'Rapport été 2026' });
     const again = S.getDoc(d.id);
-    expect(again.markdown).toBe('# Été 2026\n');
     expect(again.settings.templateId).toBe('editorial');
+    expect(again.name).toBe('Rapport été 2026');
+    expect(again.owner).toBe('u1');
     // l'original importé n'est jamais modifié
+    S.writeMarkdownFile(d.id, '# Été 2026\n');
     expect(S.readOriginal(d.id, true)).toBe('# Été\n');
-    const copy = S.duplicateDoc(d.id);
-    expect(copy.markdown).toBe('# Été 2026\n');
-    S.deleteDoc(copy.id);
-    expect(() => S.getDoc(copy.id)).toThrow(/introuvable/);
-    expect(readdirSync(join(HOME, 'trash')).some(f => f.startsWith(copy.id))).toBe(true);
+    S.deleteDoc(d.id);
+    expect(() => S.getDoc(d.id)).toThrow(/introuvable/);
+    expect(readdirSync(join(HOME, 'trash')).some(f => f.startsWith(d.id))).toBe(true);
   });
 
-  it('garde un historique des versions précédentes', () => {
-    const d = S.createDoc({ name: 'Historique', markdown: 'v1' });
-    S.updateDoc(d.id, { markdown: 'v2' });
-    const h = S.listHistory(d.id);
-    expect(h).toHaveLength(1);
-    expect(S.readHistory(d.id, h[0].id)).toBe('v1');
+  it('une version par changement réel, avec résumé', () => {
+    const d = S.createDoc({ name: 'Versions', markdown: '# A\n\nun deux' }, 'u1');
+    expect(S.addVersion(d.id, { markdown: '# A\n\nun deux', settings: {}, authors: ['u1'], kind: 'auto' })).toBeNull();
+    const v = S.addVersion(d.id, { markdown: '# A\n\nun deux trois\n\n## B\n', settings: {}, authors: ['u2'], kind: 'auto' })!;
+    expect(v.n).toBe(2);
+    expect(v.summary).toMatch(/section ajoutée : B/);
+    expect(S.listVersions(d.id).map(x => x.n)).toEqual([2, 1]);
   });
 
   it('refuse les noms de fichiers et identifiants dangereux', () => {
-    const d = S.createDoc({ name: 'Sûreté' });
+    const d = S.createDoc({ name: 'Sûreté' }, 'u1');
     expect(S.safeAssetName('../../etc/passwd.png')).toBe('passwd.png');
     expect(S.safeAssetName('Photo été 1.JPG')).toBe('Photo-ete-1.JPG');
     expect(() => S.safeAssetName('sans-extension')).toThrow();

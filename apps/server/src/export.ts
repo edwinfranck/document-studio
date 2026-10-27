@@ -2,7 +2,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { zipSync, strToU8 } from 'fflate';
-import { render, BUILTIN_TEMPLATES, slugify, type DocSettings, type Target, type Template } from '@studio/engine';
+import { render, BUILTIN_TEMPLATES, slugify, type DocSettings, type LibBlock, type Target, type Template } from '@studio/engine';
 import { nodeEnv } from '@studio/engine/node';
 import { htmlToPdf } from './browser.ts';
 
@@ -18,11 +18,11 @@ export function envFor(dir: string, embed = true) {
   });
 }
 
-export interface ExportInput { markdown: string; settings: Partial<DocSettings>; dir: string; name: string; themes?: Template[] }
+export interface ExportInput { markdown: string; settings: Partial<DocSettings>; dir: string; name: string; themes?: Template[]; blocks?: (id: string) => LibBlock | undefined }
 
 export function renderHtml(i: ExportInput, mode: Target) {
   const templates = [...BUILTIN_TEMPLATES, ...(i.themes || [])];
-  return render(i.markdown, { ...i.settings, mode }, envFor(i.dir), templates);
+  return render(i.markdown, { ...i.settings, mode }, envFor(i.dir), templates, i.blocks);
 }
 
 export async function exportPdf(i: ExportInput, mode: Target) {

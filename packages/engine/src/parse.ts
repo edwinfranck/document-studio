@@ -10,6 +10,7 @@ import type { Root, RootContent, Heading as MdHeading } from 'mdast';
 import type { Block, ComponentNode, Diagnostic, DocMeta, DocumentIR, Heading } from './types.ts';
 import { scan, type Segment } from './scanner.ts';
 import { BY_NAME, isVerbatim } from './registry.ts';
+import type { LibBlock as LibraryBlock } from './collab.ts';
 
 const processor = unified().use(remarkParse).use(remarkGfm).use(remarkMath);
 
@@ -93,7 +94,7 @@ function lev(a: string, b: string): number {
   return d[a.length][b.length];
 }
 
-function build(segs: Segment[], parentName: string | null, diags: Diagnostic[]): Block[] {
+function build(segs: Segment[], parentName: string | null, diags: Diagnostic[], opts: ParseOptions = {}, depth = 0): Block[] {
   const out: Block[] = [];
   for (const s of segs) {
     if (s.kind === 'md') { out.push(...parseMarkdown(s.text, s.line)); continue; }
@@ -112,8 +113,10 @@ function build(segs: Segment[], parentName: string | null, diags: Diagnostic[]):
       }
     } else if (entry?.spec.content === 'raw') {
       node.raw = s.body;
+    } else if (node.name === 'include') {
+      node.children = includeBlock(node, diags, opts, depth);
     } else {
-      node.children = build(s.children, node.name, diags);
+      node.children = build(s.children, node.name, diags, opts, depth);
     }
     validate(node, parentName, diags);
     out.push(node);
@@ -121,18 +124,39 @@ function build(segs: Segment[], parentName: string | null, diags: Diagnostic[]):
   return out;
 }
 
+/** Contenu d'un bloc inclus : analysé à part, toutes ses lignes ramenées à celle de l'inclusion. */
+function includeBlock(node: ComponentNode, diags: Diagnostic[], opts: ParseOptions, depth: number): Block[] {
+  const id = typeof node.attrs.block === 'string' ? node.attrs.block : '';
+  const b = id ? opts.blocks?.(id) : undefined;
+  const want = node.attrs.version ? Number(node.attrs.version) : undefined;
+  const v = b ? (want ? b.versions.find(x => x.version === want) : b.versions[b.versions.length - 1]) : undefined;
+  if (!id) return [];
+  if (!v || depth > 3) {
+    diags.push({ severity: 'warning', line: node.line, code: 'missing-block', message: depth > 3 ? `Bloc « ${id} » : inclusions imbriquées trop profondes.` : `Bloc « ${id} »${want ? ` (version ${want})` : ''} introuvable dans la bibliothèque.` });
+    node.data = { missing: true };
+    return [];
+  }
+  node.data = { name: b!.name, version: v.version, latest: b!.versions[b!.versions.length - 1].version };
+  const inner: Diagnostic[] = [];
+  const kids = build(scan(v.markdown, 0, isVerbatim, inner), null, inner, opts, depth + 1);
+  const pin = (n: any) => { if (n.position) { n.position.start.line = node.line; n.position.end.line = node.line; } if (n.line) { n.line = node.line; n.endLine = node.line; } (n.children || []).forEach(pin); };
+  kids.forEach(pin);
+  if (inner.some(d => d.severity !== 'info')) diags.push({ severity: 'warning', line: node.line, code: 'block-problems', message: `Le bloc « ${b!.name} » contient ${inner.length} problème(s) : corrigez-le dans la bibliothèque.` });
+  return kids;
+}
+
 function walk(blocks: Block[], fn: (n: any) => void) {
   for (const b of blocks) { fn(b); if ((b as any).children) walk((b as any).children, fn); }
 }
 
-export interface ParseOptions { numbering?: boolean; numberingDepth?: number }
+export interface ParseOptions { numbering?: boolean; numberingDepth?: number; blocks?: (id: string) => LibraryBlock | undefined }
 
 export function parse(source: string, opts: ParseOptions = {}): DocumentIR {
   const diags: Diagnostic[] = [];
   const src = source.replace(/\r\n?/g, '\n').replace(/^﻿/, '');
   const fm = splitFrontmatter(src, diags);
   const segs = scan(fm.body, fm.lines, isVerbatim, diags);
-  const blocks = build(segs, null, diags);
+  const blocks = build(segs, null, diags, opts);
 
   // Titres : identifiants uniques, numérotation, plan.
   const used = new Map<string, number>();

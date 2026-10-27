@@ -40,6 +40,17 @@ export const COMPONENTS: ComponentSpec[] = [
     example: ':::callout {type="warning" title="Attention"}\nLa salle ferme à 18 h.\n:::',
   },
   {
+    name: 'include', category: 'Contenu', label: 'Bloc réutilisable',
+    description: 'Insère un bloc de la bibliothèque, à une version précise. Le bloc ne change pas tant que la version n\'est pas mise à jour.',
+    content: 'none',
+    attrs: {
+      block: { type: 'string', required: true, description: 'Identifiant du bloc.' },
+      version: { type: 'number', description: 'Version épinglée (sinon, la dernière).' },
+    },
+    targets: { reading: 'Contenu du bloc.', print: 'Contenu du bloc.', slides: 'Contenu du bloc.' },
+    example: ':::include {block="coordonnees" version=1} :::',
+  },
+  {
     name: 'details', category: 'Contenu', label: 'Accordéon',
     description: 'Contenu repliable, ouvert d\'un clic.',
     aliases: { accordion: {} },

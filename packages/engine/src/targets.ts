@@ -7,6 +7,7 @@ import { esc, frenchSpacing } from './html.ts';
 import { parse, sortDiags, textOf } from './parse.ts';
 import { isDark, resolveTheme, schemeCss, themeClasses, tokensCss, type ResolvedTheme } from './themes.ts';
 import * as A from './assets.gen.ts';
+import type { LibBlock as LibraryBlock } from './collab.ts';
 
 export interface RenderResult {
   html: string;
@@ -18,9 +19,9 @@ export interface RenderResult {
 
 const PAGE_SIZES: Record<string, [number, number]> = { A4: [210, 297], A3: [297, 420], A5: [148, 210], Letter: [215.9, 279.4], Legal: [215.9, 355.6] };
 
-export function render(source: string, settings: Partial<DocSettings>, env: RenderEnv, templates?: Template[]): RenderResult {
+export function render(source: string, settings: Partial<DocSettings>, env: RenderEnv, templates?: Template[], blocks?: (id: string) => LibraryBlock | undefined): RenderResult {
   const theme = resolveTheme(settings, templates);
-  const ir = parse(source, { numbering: theme.tokens.layout.numbering, numberingDepth: theme.tokens.layout.numberingDepth });
+  const ir = parse(source, { numbering: theme.tokens.layout.numbering, numberingDepth: theme.tokens.layout.numberingDepth, blocks });
   const meta: DocMeta = { ...(settings.meta || {}), ...stripEmpty(ir.meta) };
   if (!meta.title) meta.title = 'Sans titre';
   const target: Target = settings.mode || 'reading';

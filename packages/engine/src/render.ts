@@ -355,6 +355,11 @@ export function component(n: ComponentNode, ctx: Ctx): string {
     case 'notes': return t === 'slides' ? `<aside class="sd-notes">${kids()}</aside>` : '';
     case 'cover': return t === 'slides' ? kids() : '';   // placé par la cible
     case 'toc': return tocHtml(ctx.headings, Number(a.depth) || 2, ctx, 'sd-toc-inline') + kids();
+    case 'include': {
+      const d: any = n.data || {};
+      if (d.missing) return `<div class="sd-unknown"${L}><div class="sd-unknown-label">Bloc introuvable : ${esc(a.block)}</div></div>`;
+      return `<div class="sd-include" data-block="${esc(a.block)}"${L}>${kids()}</div>`;
+    }
     case 'pagebreak': return `<div class="sd-pagebreak" aria-hidden="true"${L}></div>${kids()}`;
     case 'appendix': return `${t === 'print' ? '<div class="sd-pagebreak" aria-hidden="true"></div>' : ''}<section${idCls(n, 'sd-appendix')}${L}>${kids()}</section>`;
     case 'references': {

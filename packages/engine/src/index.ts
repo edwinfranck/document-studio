@@ -10,3 +10,4 @@ export {
 } from './themes.ts';
 export { esc, safeHref, safeSrc } from './html.ts';
 export { fontFaceCss, FONT_FAMILIES, FONT_MANIFEST, type FontFace } from './fonts.ts';
+export * from './collab.ts';
