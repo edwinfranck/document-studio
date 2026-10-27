@@ -6,20 +6,21 @@ import * as Y from 'yjs';
 import {
   Activity as ActivityIcon, AlertCircle, AlertTriangle, ArrowLeft, BookOpen, Check, ChevronDown, CloudOff, Columns2, Copy, Download, Eye, FileCode2, FileDown, FileText, FileUp, Files,
   GitBranch, History, Image as ImageIcon, Info, ListTree, Loader2, LogOut, Maximize2, MessageSquare, Minimize2, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen,
-  Presentation, Printer, Redo2, Settings2, Share2, Trash2, Undo2, Upload, X,
+  PenLine, Presentation, Printer, Redo2, Send, Settings, Settings2, Share2, Trash2, Undo2, Upload, X,
 } from 'lucide-react';
-import { DEFAULT_SETTINGS, render, resolveTheme, SLIDE_SIZES, type ComponentNode, type Diagnostic, type DocSettings, type Target } from '@studio/engine';
+import { DEFAULT_SETTINGS, offsetMapper, render, resolveTheme, SLIDE_SIZES, suggestionHunks, type ComponentNode, type Diagnostic, type DocSettings, type Target } from '@studio/engine';
 import { api, collab, download, shareState, type Block, type Comment, type Role } from './api.ts';
 import { findAsset, previewEnv } from './env.ts';
-import { createEditor, editorRedo, editorUndo, goToLine, insertAt, replaceAll, rewriteOpener, setComments, setLint, type CommentRange } from './editor.ts';
+import { createEditor, editorRedo, editorUndo, goToLine, insertAt, replaceAll, rewriteOpener, setComments, setLint, trackChanges, type CommentRange } from './editor.ts';
 import { recordTextStep, redoAction, saveNow, undoAction, useStudio } from './store.ts';
 import { Provider } from './collabClient.ts';
-import { Preview } from './Preview.tsx';
+import { Preview, type PageZone } from './Preview.tsx';
 import { Inspector } from './Inspector.tsx';
 import { TemplateGallery } from './TemplateGallery.tsx';
 import { ShareDialog } from './ShareDialog.tsx';
-import { ActivityPanel, canDo, CommentsPanel, HistoryPanel, NotificationsBell, Presence, SyncState, WorkflowControl, type Selection } from './CollabPanels.tsx';
-import { BlocksSection, BranchBanner, BranchButton, CompareTemplates } from './Extras.tsx';
+import { ActivityPanel, canDo, CommentsPanel, HistoryPanel, NotificationsBell, Presence, SyncState, WorkflowControl, type Selection, type ZoneSel } from './CollabPanels.tsx';
+import { BlocksSection, BrandSection, BranchBanner, BranchButton, CompareTemplates } from './Extras.tsx';
+import { SettingsDialog, type SettingsTab } from './Settings.tsx';
 import { Menu, Modal, Resizer, Segmented, fmtDate, fmtSize, usePersisted } from './ui.tsx';
 
 const PAGE_W: Record<string, [number, number]> = { A4: [210, 297], A3: [297, 420], A5: [148, 210], Letter: [215.9, 279.4], Legal: [215.9, 355.6] };
@@ -80,6 +81,16 @@ export function Workspace({ onBack }: { onBack: () => void }) {
   const [comments, setCommentsList] = useState<Comment[]>([]);
   const [activeComment, setActiveComment] = useState<string | null>(null);
   const [blocks, setBlocks] = useState<Block[]>([]);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);
+  // Commentaire sur une zone de page imprimée
+  const [zoneMode, setZoneMode] = useState(false);
+  const [zoneDraft, setZoneDraft] = useState<ZoneSel | null>(null);
+  const [zoneFocus, setZoneFocus] = useState<{ id: string; n: number } | null>(null);
+  // Mode suggestion : la frappe reste locale ; à l'envoi, chaque changement devient une suggestion
+  const [suggesting, setSuggesting] = useState<{ base: string } | null>(null);
+  const [suggestCount, setSuggestCount] = useState(0);
+  const [suggestNote, setSuggestNote] = useState('');
+  const [sending, setSending] = useState(false);
   const mode = settings.mode;
 
   const showSource = layout === 'mobile' ? mobileView === 'source' : leftOpen && leftTab === 'source';
@@ -132,7 +143,7 @@ export function Workspace({ onBack }: { onBack: () => void }) {
     if (!doc) return null;
     try { return render(md, s, previewEnv(doc.id, assets), templates, bid => blocks.find(b => b.id === bid) as any); }
     catch (e: any) { console.error(e); return null; }
-  }, [md, s, assets, templates, doc?.id, blocks]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [md, s, assets, templates, doc?.id, blocks, st.pluginsRev]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const diagnostics: Diagnostic[] = useMemo(() => {
     const d = result?.diagnostics || [];
@@ -143,14 +154,16 @@ export function Workspace({ onBack }: { onBack: () => void }) {
   useEffect(() => {
     if (!editorHost.current || !doc || !ready || !sourceMounted) return;
     const p = useStudio.getState().provider;
-    const um = p ? new Y.UndoManager(p.text) : null;
+    const um = p && !suggesting ? new Y.UndoManager(p.text) : null;
     undoRef.current = um;
-    const view = createEditor(editorHost.current, p ? p.text.toString() : useStudio.getState().markdown, {
+    const view = createEditor(editorHost.current, suggesting ? useStudio.getState().markdown : p ? p.text.toString() : useStudio.getState().markdown, {
       onChange: v => useStudio.getState().setMarkdown(v),
       onTextStep: recordTextStep,
       onCursor: line => { setScrollReq({ line, n: Date.now() }); p?.setCursorLine(line); },
       onPasteFiles: (files, pos) => uploadFiles(files, pos),
-    }, { collab: p && um ? { text: p.text, awareness: p.awareness, undo: um } : undefined, readOnly });
+    }, suggesting
+      ? { extra: trackChanges(suggesting.base, setSuggestCount) }
+      : { collab: p && um ? { text: p.text, awareness: p.awareness, undo: um } : undefined, readOnly });
     viewRef.current = view;
     const onClick = (e: MouseEvent) => {
       const id = (e.target as HTMLElement).closest?.('[data-comment]')?.getAttribute('data-comment');
@@ -159,12 +172,12 @@ export function Workspace({ onBack }: { onBack: () => void }) {
     editorHost.current.addEventListener('click', onClick);
     const host = editorHost.current;
     return () => { host.removeEventListener('click', onClick); view.destroy(); viewRef.current = null; um?.destroy(); undoRef.current = null; };
-  }, [doc?.id, ready, sourceMounted, layout, readOnly]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [doc?.id, ready, sourceMounted, layout, readOnly, suggesting]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Passages commentés et suggestions, recalculés quand le texte bouge.
   useEffect(() => {
     const v = viewRef.current;
-    if (!v || !provider) return;
+    if (!v || !provider || suggesting) return;
     const ranges: CommentRange[] = [];
     for (const c of comments) {
       if (c.status !== 'open' || !c.anchor.start) continue;
@@ -172,7 +185,66 @@ export function Workspace({ onBack }: { onBack: () => void }) {
       if (r) ranges.push({ id: c.id, from: r.from, to: r.to, kind: c.kind, replacement: c.replacement, active: c.id === activeComment });
     }
     v.dispatch({ effects: setComments.of(ranges) });
-  }, [comments, markdown, activeComment, provider, ready, showSource]);
+  }, [comments, markdown, activeComment, provider, ready, showSource, suggesting]);
+
+  /* ----- Mode suggestion ----- */
+  const startSuggesting = () => {
+    if (!provider) return;
+    const base = provider.text.toString();
+    useStudio.setState({ markdown: base });
+    setSuggestCount(0); setSuggestNote('');
+    setSuggesting({ base });
+    openSource();
+  };
+  const stopSuggesting = () => {
+    setSuggesting(null);
+    if (provider) useStudio.setState({ markdown: provider.text.toString() });
+  };
+  const sendSuggestions = async () => {
+    const v = viewRef.current;
+    if (!suggesting || !provider || !v || !doc) return;
+    const base = suggesting.base;
+    const edited = v.state.doc.toString();
+    const live = provider.text.toString();
+    // Le document a pu changer pendant la saisie : chaque changement est replacé dans le texte actuel.
+    const map = offsetMapper(base, live);
+    let sent = 0, skipped = 0;
+    setSending(true);
+    try {
+      for (const h of suggestionHunks(base, edited)) {
+        const from = map(h.from, 1);
+        const to = h.to === h.from ? from : map(h.to, -1);
+        const quote = base.slice(h.from, h.to);
+        if (from === null || to === null || live.slice(from, to) !== quote) { skipped++; continue; }
+        await collab.addComment(doc.id, {
+          kind: 'suggestion', body: suggestNote, replacement: h.insert, mentions: [],
+          anchor: { ...provider.anchor(from, to), quote, line: live.slice(0, from).split('\n').length },
+        });
+        sent++;
+      }
+      stopSuggesting();
+      loadComments();
+      openPanel('comments');
+      toast(skipped ? `${sent} suggestion(s) envoyée(s) ; ${skipped} écartée(s) car le passage a été modifié entre-temps.` : `${sent} suggestion${sent > 1 ? 's' : ''} envoyée${sent > 1 ? 's' : ''} pour relecture.`, skipped ? 'error' : 'info');
+    } catch (e: any) { toast(e.message, 'error'); }
+    finally { setSending(false); }
+  };
+
+  /* ----- Zones de page ----- */
+  const startZone = () => {
+    if (mode !== 'print') st.setSettings(x => ({ ...x, mode: 'print' }));
+    setZoneMode(true);
+    if (layout === 'mobile') setMobileView('preview');
+    else if (layout === 'tablet') setDrawer(null);
+  };
+  useEffect(() => {
+    if (!zoneMode) return;
+    const k = (e: KeyboardEvent) => { if (e.key === 'Escape') setZoneMode(false); };
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }, [zoneMode]);
+  const zones: PageZone[] = useMemo(() => comments.filter(c => c.status === 'open' && c.anchor.page && c.anchor.rect)
+    .map((c, i) => ({ id: c.id, page: c.anchor.page!, rect: c.anchor.rect!, n: i + 1, active: c.id === activeComment, title: c.body.slice(0, 80) })), [comments, activeComment]);
 
   // Document vierge : la source s'ouvre, texte sélectionné, prête à recevoir un collage.
   useEffect(() => {
@@ -346,7 +418,7 @@ export function Workspace({ onBack }: { onBack: () => void }) {
   );
   const docMenu = (
     <Menu trigger={toggle => <button className="btn ghost icon" onClick={toggle} aria-label="Paramètres du document"><MoreHorizontal /></button>}>
-      {close => <DocMenu close={close} openHistory={() => setDialog('history')} onDeleted={onBack} onBranch={() => setDialog('branch')} onCompare={() => setDialog('compare')} />}
+      {close => <DocMenu close={close} openHistory={() => setDialog('history')} onDeleted={onBack} onBranch={() => setDialog('branch')} onCompare={() => setDialog('compare')} onSettings={() => setSettingsTab(collabOn ? 'notifications' : 'plugins')} />}
     </Menu>
   );
   const status = provider ? <SyncState provider={provider} /> : <SaveIndicator state={save} error={saveError} />;
@@ -361,9 +433,23 @@ export function Workspace({ onBack }: { onBack: () => void }) {
           {layout !== 'mobile' && <button role="tab" aria-selected={leftTab === 'files'} onClick={() => setLeftTab('files')}><ImageIcon />Fichiers<span className="count">{assets.length || ''}</span></button>}
         </div>
         <div className="grow" />
-        {readOnly && <span className="badge">lecture seule</span>}
+        {provider && canDo.comment(role) && !suggesting && (layout === 'mobile' || leftTab === 'source') && (
+          <button className="btn sm ghost" onClick={startSuggesting} title="Modifier le texte sans toucher au document : chaque changement devient une suggestion à accepter ou refuser"><PenLine /><span className="lbl">Suggérer</span></button>
+        )}
+        {readOnly && !suggesting && <span className="badge">lecture seule</span>}
         {layout === 'tablet' && <button className="btn ghost icon" onClick={() => setDrawer(null)} aria-label="Fermer"><X /></button>}
       </div>
+      {suggesting && showSource && (
+        <div className="suggest-bar">
+          <div className="row"><PenLine size={15} /><strong className="grow">Mode suggestion</strong><span className="badge">{suggestCount} changement{suggestCount > 1 ? 's' : ''}</span></div>
+          <div className="faint" style={{ fontSize: 12 }}>Le document n'est pas modifié. À l'envoi, chaque changement devient une suggestion que les éditeurs acceptent ou refusent.</div>
+          <div className="row">
+            <input className="input grow" placeholder="Motif (facultatif)" value={suggestNote} onChange={e => setSuggestNote(e.target.value)} />
+            <button className="btn sm ghost" onClick={() => { if (!suggestCount || confirm('Abandonner ces modifications ?')) stopSuggesting(); }}>Abandonner</button>
+            <button className="btn sm primary" disabled={!suggestCount || sending} onClick={sendSuggestions}>{sending ? <span className="spin" /> : <Send />}Envoyer</button>
+          </div>
+        </div>
+      )}
       <div className="editor" ref={editorHost} style={{ display: showSource ? undefined : 'none' }} />
       {layout !== 'mobile' && leftTab === 'outline' && result && <Outline ir={result.ir} onJump={jump} />}
       {layout !== 'mobile' && leftTab === 'files' && <FilesPanel referenced={result?.ir.assets || []} onUpload={f => uploadFiles(f)} onInsert={name => { setLeftTab('source'); setTimeout(() => viewRef.current && insertAt(viewRef.current, viewRef.current.state.selection.main.head, `![${name.replace(/\.[^.]+$/, '')}](./assets/${name})`), 30); }} />}
@@ -402,6 +488,7 @@ export function Workspace({ onBack }: { onBack: () => void }) {
           onInsert={text => { openSource(); setTimeout(() => { const v = viewRef.current; if (v) insertAt(v, v.state.selection.main.head, text); }, 60); }}
           onReplaceLine={(line, text) => { openSource(); setTimeout(() => { const v = viewRef.current; if (!v) return; const l = v.state.doc.line(line); v.dispatch({ changes: { from: l.from, to: l.to, insert: text } }); }, 60); }} />
       ) : undefined}
+      brandNode={collabOn && me && canDo.edit(role) ? <BrandSection onSettings={() => setSettingsTab('brands')} /> : undefined}
       onInsert={text => { openSource(); setTimeout(() => { const v = viewRef.current; if (v) insertAt(v, v.state.selection.main.head, text); }, 60); }}
       onEditComponent={(c, attrs) => { if (viewRef.current) rewriteOpener(viewRef.current, c.line, c.given, attrs, c.classes, c.id); }}
     />
@@ -410,7 +497,8 @@ export function Workspace({ onBack }: { onBack: () => void }) {
   const commentsPanel = provider && canDo.comment(role) ? (
     <CommentsPanel docId={doc.id} provider={provider} role={role} members={doc.members || []} comments={comments} reload={loadComments}
       getSelection={getSelection} activeId={activeComment} setActiveId={setActiveComment}
-      onJump={c => { const r = c.anchor.start ? provider.resolve(c.anchor) : null; if (r) { const line = provider.text.toString().slice(0, r.from).split('\n').length; if (layout !== 'mobile') jump(line); else setScrollReq({ line, n: Date.now() }); } }} />
+      zone={zoneDraft} clearZone={() => setZoneDraft(null)} onStartZone={startZone}
+      onJump={c => { if (c.anchor.page && c.anchor.rect) { if (mode !== 'print') st.setSettings(x => ({ ...x, mode: 'print' })); if (layout === 'mobile') setMobileView('preview'); setZoneFocus({ id: c.id, n: Date.now() }); return; } const r = c.anchor.start ? provider.resolve(c.anchor) : null; if (r) { const line = provider.text.toString().slice(0, r.from).split('\n').length; if (layout !== 'mobile') jump(line); else setScrollReq({ line, n: Date.now() }); } }} />
   ) : <div className="side-panel"><div className="empty-small">{collabOn ? 'Les commentaires sont réservés aux commentateurs et éditeurs.' : 'Les commentaires demandent le serveur Document Studio.'}</div></div>;
   const historyPanel = collabOn ? <HistoryPanel docId={doc.id} role={role} onRestored={() => {}} /> : <div className="side-panel"><button className="btn" onClick={() => setDialog('history')}><History />Ouvrir l'historique</button></div>;
 
@@ -439,6 +527,9 @@ export function Workspace({ onBack }: { onBack: () => void }) {
 
   const preview = result ? (
     <Preview html={result.html} mode={mode} pageWidthMm={pageMm} slideSize={slideSize} scrollRequest={scrollReq} compact={layout === 'mobile'}
+      zoneMode={zoneMode} zones={zones} zoneFocus={zoneFocus}
+      onZone={z => { setZoneMode(false); setZoneDraft(z); openPanel('comments'); }}
+      onZoneClick={id => { setActiveComment(id); openPanel('comments'); }}
       onSelect={line => { useStudio.setState({ selectedLine: line }); if (viewRef.current && showSource) goToLine(viewRef.current, line, false); }} />
   ) : <div className="empty"><AlertCircle className="big" /><h2>Rendu impossible</h2><p>Le détail est dans la console du navigateur.</p></div>;
 
@@ -450,6 +541,7 @@ export function Workspace({ onBack }: { onBack: () => void }) {
       {dialog === 'preview' && result && <FullPreview html={result.html} onClose={() => setDialog(null)} />}
       {dialog === 'branch' && <BranchButton docId={doc.id} onClose={() => setDialog(null)} />}
       {dialog === 'compare' && <CompareTemplates blocks={blocks} onClose={() => setDialog(null)} />}
+      {settingsTab && <SettingsDialog initial={settingsTab} onClose={() => { setSettingsTab(null); useStudio.getState().loadTemplates(); }} />}
     </>
   );
 
@@ -640,7 +732,7 @@ function FilesPanel({ referenced, onUpload, onInsert }: { referenced: string[]; 
   );
 }
 
-function DocMenu({ close, openHistory, onDeleted, onBranch, onCompare }: { close: () => void; openHistory: () => void; onDeleted: () => void; onBranch: () => void; onCompare: () => void }) {
+function DocMenu({ close, openHistory, onDeleted, onBranch, onCompare, onSettings }: { close: () => void; openHistory: () => void; onDeleted: () => void; onBranch: () => void; onCompare: () => void; onSettings: () => void }) {
   const { doc, toast, setSettings, me } = useStudio();
   const role = (doc?.role || 'owner') as Role;
   const input = useRef<HTMLInputElement>(null);
@@ -669,6 +761,7 @@ function DocMenu({ close, openHistory, onDeleted, onBranch, onCompare }: { close
       <input ref={input} type="file" accept=".json" hidden onChange={e => { const f = e.target.files?.[0]; if (f) importSettings(f); e.target.value = ''; }} />
       <hr />
       {(!api.backend.collab || me) && <button onClick={async () => { close(); try { const c = await api.duplicate(doc.id); location.hash = `#/doc/${c.id}`; toast('Copie créée.'); } catch (e: any) { toast(e.message, 'error'); } }}><Copy /><span>Dupliquer</span></button>}
+      <button onClick={() => { close(); onSettings(); }}><Settings /><span>Paramètres<span className="sub">{api.backend.collab ? 'Notifications, espaces, identités, plugins' : 'Plugins de composants'}</span></span></button>
       <button onClick={() => { setUi(ui === 'dark' ? 'light' : 'dark'); document.documentElement.dataset.ui = ui === 'dark' ? 'light' : 'dark'; close(); }}><Eye /><span>Interface {ui === 'dark' ? 'claire' : 'sombre'}</span></button>
       {me && <button onClick={() => { close(); collab.logout().then(() => { location.hash = '#/'; location.reload(); }); }}><LogOut /><span>Se déconnecter ({me.name})</span></button>}
       {canDo.owner(role) && <><hr />

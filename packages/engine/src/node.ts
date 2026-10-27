@@ -2,13 +2,20 @@
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import type { RenderEnv } from './types.ts';
 import { fontFaceCss } from './fonts.ts';
 
 export const ENGINE_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 export const FONTS_DIR = join(ENGINE_DIR, 'fonts');
-export const PAGEDJS_FILE = join(ENGINE_DIR, 'node_modules/pagedjs/dist/paged.polyfill.min.js');
-export const KATEX_DIR = join(ENGINE_DIR, 'node_modules/katex/dist');
+/** Dossier d'une dépendance du moteur, où que le gestionnaire de paquets l'ait rangée (dépôt, pnpm deploy, application). */
+function pkgDir(name: string): string {
+  const paths = createRequire(join(ENGINE_DIR, 'package.json')).resolve.paths(name) || [];
+  for (const p of paths) if (existsSync(join(p, name, 'package.json'))) return join(p, name);
+  return join(ENGINE_DIR, 'node_modules', name);
+}
+export const PAGEDJS_FILE = join(pkgDir('pagedjs'), 'dist/paged.polyfill.min.js');
+export const KATEX_DIR = join(pkgDir('katex'), 'dist');
 
 export const MIME: Record<string, string> = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',

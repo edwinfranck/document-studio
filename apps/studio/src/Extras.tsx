@@ -1,8 +1,8 @@
-// Fonctions avancées : branches et fusion, bibliothèque de blocs réutilisables, comparaison de gabarits.
+// Fonctions avancées : branches et fusion, bibliothèque de blocs réutilisables, identités visuelles, comparaison de gabarits.
 import { useEffect, useMemo, useState } from 'react';
-import { Blocks, Copy, GitBranch, GitMerge, Link2, Plus, RefreshCw, Trash2, Unlink } from 'lucide-react';
+import { Blocks, Copy, GitBranch, GitMerge, Link2, Plus, RefreshCw, Stamp, Trash2, Unlink } from 'lucide-react';
 import { findIncludes, lineDiff, render, type Target } from '@studio/engine';
-import { collab, type Block, type Doc } from './api.ts';
+import { collab, type Block, type BrandOut, type Doc } from './api.ts';
 import { previewEnv } from './env.ts';
 import { useStudio } from './store.ts';
 import { Modal, Select, Toggle } from './ui.tsx';
@@ -160,5 +160,53 @@ export function CompareTemplates({ onClose, blocks }: { onClose: () => void; blo
         ))}
       </div>
     </Modal>
+  );
+}
+
+/* ---------- Identités visuelles ---------- */
+
+/** Applique une identité de la bibliothèque. Une version plus récente est proposée, jamais imposée. */
+export function BrandSection({ onSettings }: { onSettings: () => void }) {
+  const { doc, settings, toast } = useStudio();
+  const [list, setList] = useState<BrandOut[] | null>(null);
+  const [cover, setCover] = useState(false);
+  const [busy, setBusy] = useState('');
+  useEffect(() => { collab.brands().then(setList, () => setList([])); }, []);
+  if (!doc) return null;
+  const applied = settings.brand;
+  const source = applied && list?.find(b => b.id === applied.id);
+  const apply = (b: BrandOut, withCover: boolean) => {
+    setBusy(b.id);
+    collab.applyBrand(doc.id, b.id, withCover).then(r => {
+      // les réglages arrivent aussi par la connexion temps réel ; on les reprend tout de suite pour l'aperçu
+      useStudio.setState(x => ({ settings: { ...x.settings, ...r.settings } as any, doc: x.doc && { ...x.doc, assets: r.assets } }));
+      toast(`Identité « ${b.name} » appliquée (version ${b.version}).`);
+    }, (e: any) => toast(e.message, 'error')).finally(() => setBusy(''));
+  };
+  return (
+    <div className="col" style={{ gap: 8 }}>
+      {applied && (
+        <div className={'note' + (source && source.version > applied.version ? ' warn' : '')}>
+          <strong>{applied.name}</strong> · version {applied.version}
+          {source && source.version > applied.version && <>
+            <div style={{ margin: '4px 0 6px' }}>Version {source.version} disponible : {source.history.filter(h => h.version > applied.version).map(h => h.summary).join(' ; ')}.</div>
+            <button className="btn sm" disabled={!!busy} onClick={() => apply(source, false)}><RefreshCw />Mettre à jour</button>
+          </>}
+          {!source && list && <div className="faint" style={{ fontSize: 12 }}>Cette identité n'est plus dans votre bibliothèque ; ses réglages restent appliqués.</div>}
+        </div>
+      )}
+      {list === null && <div className="empty-small"><span className="spin" /></div>}
+      {list?.length === 0 && <div className="token-help">Aucune identité. Créez-en une (logos, couleurs, polices, couverture, pieds de page) pour l'appliquer d'un clic.</div>}
+      {list?.map(b => (
+        <div key={b.id} className="brand-pick">
+          <span className="swatches">{(['primary', 'secondary', 'accent'] as const).map(k => b.colors[k] && <span key={k} style={{ background: b.colors[k] }} />)}</span>
+          <span className="grow"><span style={{ fontWeight: 600 }}>{b.name}</span><span className="faint" style={{ fontSize: 12 }}> · v{b.version}{b.logos.length ? ` · ${b.logos.length} logo${b.logos.length > 1 ? 's' : ''}` : ''}</span></span>
+          <button className="btn sm" disabled={!!busy} onClick={() => apply(b, cover)}>{busy === b.id ? <span className="spin" /> : <Stamp />}{applied?.id === b.id ? 'Réappliquer' : 'Appliquer'}</button>
+        </div>
+      ))}
+      {list && list.some(b => b.cover) && <Toggle checked={cover} onChange={setCover}>Insérer aussi la couverture de l'identité</Toggle>}
+      <button className="btn sm ghost" onClick={onSettings}><Plus />Gérer les identités</button>
+      <div className="token-help">Appliquer change la présentation (couleurs, polices, pieds de page, logos copiés dans les fichiers du document), jamais le texte, sauf la couverture si vous la demandez.</div>
+    </div>
   );
 }

@@ -8,6 +8,9 @@ apps/studio  (React + CodeMirror)          apps/server  (Node, 127.0.0.1)
   aperçu ◄─┤  @studio/engine (même code)      exports HTML / PDF / ZIP  ◄── @studio/engine
   inspecteur                                  Chrome sans tête (PDF)
                                               CLI  studio export|check|serve
+apps/desktop (Electron)
+  fenêtre ── interface servie par le serveur, lancé dans un processus fils
+  PDF ◄───── le serveur demande l'impression au Chromium d'Electron (IPC)
 ```
 
 Un seul moteur, `packages/engine`, en TypeScript isomorphe : l'aperçu tourne dans le navigateur, les exports dans Node, avec le même code. Seul l'**environnement de rendu** change : URL servies par le serveur local pour l'aperçu, données intégrées (`data:`) pour les exports.
@@ -32,7 +35,8 @@ Le contenu (IR) ne porte aucune propriété visuelle ; un changement de gabarit 
 
 | Choix | Pourquoi | Compromis |
 |---|---|---|
-| **Application web locale** (serveur Node + interface navigateur) plutôt que Tauri | Pas de chaîne Rust à compiler ; le PDF exige un Chromium de toute façon (la vue système de Tauri ne produit pas de PDF paginé fiable). Le moteur ne dépend d'aucun des deux : un habillage Tauri reste possible | Il faut lancer `pnpm start` ; pas d'icône de bureau |
+| **Application de bureau Electron** plutôt que Tauri | Le PDF exige un Chromium : Electron l'embarque et imprime les documents paginés lui-même, sans Chrome installé ; la vue système de Tauri (WebKitGTK sous Linux) ne produit pas de PDF paginé fiable. Le serveur tourne tel quel dans un processus fils | Installable lourd (environ 130 Mo) |
+| **Plugins déclaratifs** (JSON : attributs typés, gabarit HTML, CSS) plutôt que du code | Un plugin s'installe sans risque : rien ne s'exécute, chaque valeur est échappée selon son type, le gabarit est nettoyé | Pas de logique (calculs, données externes) dans un plugin |
 | **Paged.js pour l'aperçu ET le PDF** | Le PDF est l'impression du document que l'aperçu affiche : même pagination, même moteur (Chrome) | Paged.js ignore certains sélecteurs (`:is()`, `:not()` composés, `body` dans les règles de coupure) : contourné, documenté dans `print.css` |
 | **Moteur de diapositives maison** plutôt que reveal.js | Un fichier autonome léger, la même feuille de style que les documents, l'ajustement automatique du texte | Pas d'écosystème de plugins reveal |
 | **Fichiers ordinaires + JSON** plutôt que SQLite | Le Markdown reste récupérable sans l'application ; aucune base opaque | Liste reconstruite par lecture des dossiers : suffisant jusqu'à quelques milliers de documents |
@@ -104,3 +108,4 @@ navigateur : CodeMirror + y-codemirror ─┐                    ┌─ collab.b
 | Coupure de tableaux | En-têtes répétés (testé) ; une ligne plus haute qu'une page reste un cas limite |
 | Images distantes | Chargées dans l'aperçu, bloquées dans le PDF (rendu hors réseau) : à télécharger dans les fichiers du document |
 | Serveur unique | Les salons temps réel vivent dans un seul processus : pas de répartition sur plusieurs serveurs |
+| Plugins | Un plugin installé change le registre des composants du moteur pour tout le serveur ; un nom intégré ne peut pas être repris |

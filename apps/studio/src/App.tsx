@@ -4,6 +4,7 @@ import { FONT_FAMILIES, fontFaceCss } from '@studio/engine';
 import { api, collab, initBackend, shareState, type Me } from './api.ts';
 import { loadKatex } from './env.ts';
 import { useStudio } from './store.ts';
+import { loadPlugins } from './plugins.ts';
 import { Library } from './Library.tsx';
 import { Workspace } from './Workspace.tsx';
 import { AuthScreen } from './AuthScreen.tsx';
@@ -22,9 +23,10 @@ export function App() {
 
   const boot = async () => {
     const be = await initBackend();
+    await loadPlugins();
     if (!be.collab) { setReady(true); return; }
     const st = await collab.state();
-    useStudio.setState({ me: st.me });
+    useStudio.setState({ me: st.me, prefs: st.prefs, mailEnabled: st.mail });
     const token = shareRoute();
     if (token) {
       try {

@@ -8,3 +8,7 @@ apps/studio/public/fonts/
 apps/studio/public/vendor/
 .vercel
 .env*
+!.env.example
+apps/desktop/out/
+apps/desktop/dist/
+apps/desktop/runtime/

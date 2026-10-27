@@ -1,0 +1,29 @@
+# Serveur d'équipe : Document Studio derrière Caddy (HTTPS automatique, WebSocket compris).
+#   cp deploy/.env.example .env   puis renseigner STUDIO_DOMAIN (et l'envoi d'e-mails)
+#   docker compose up -d
+services:
+  studio:
+    build: .
+    image: ghcr.io/edwinfranck/document-studio:latest
+    restart: unless-stopped
+    environment:
+      STUDIO_PUBLIC_URL: https://${STUDIO_DOMAIN:?indiquez STUDIO_DOMAIN dans .env}
+      STUDIO_SIGNUP: ${STUDIO_SIGNUP:-invite}
+      STUDIO_ADMINS: ${STUDIO_ADMINS:-}
+      STUDIO_SMTP_URL: ${STUDIO_SMTP_URL:-}
+      STUDIO_MAIL_FROM: ${STUDIO_MAIL_FROM:-}
+    volumes:
+      - studio-data:/data
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      STUDIO_DOMAIN: ${STUDIO_DOMAIN}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on: [studio]
+volumes:
+  studio-data:
+  caddy-data:

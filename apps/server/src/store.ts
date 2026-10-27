@@ -13,15 +13,20 @@
 //   <home>/publications/<pubId>/            instantanés publiés (HTML, PDF), liés à une version
 //   <home>/blocks/<id>.json                 bibliothèque de blocs réutilisables
 //   <home>/themes/<id>.json                 gabarits personnels
+//   <home>/spaces.json                      espaces d'équipe : membres, rôle par défaut
+//   <home>/brands/<id>.json, brands/<id>/   identités visuelles (logos, couleurs, polices, couverture)
+//   <home>/plugins/<id>.json                plugins de composants (déclaratifs)
+//   <home>/workflow-templates.json          modèles de validation réutilisables
+//   <home>/mailqueue/<userId>.json          notifications en attente du résumé quotidien
 //   <home>/trash/                           documents supprimés (récupérables à la main)
 
 import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
-  changeStats, DEFAULT_WORKFLOW, maxRole, slugify,
-  type DocSettings, type LibBlock, type Role, type Template, type Workflow,
+  brandSummary, changeStats, DEFAULT_WORKFLOW, maxRole, slugify,
+  type Brand, type DocSettings, type LibBlock, type Role, type Template, type Workflow, type WorkflowTemplate,
 } from '@studio/engine';
 
 export const HOME = process.env.STUDIO_HOME || join(homedir(), 'DocumentStudio');
@@ -31,7 +36,10 @@ const TRASH = join(HOME, 'trash');
 const NOTIFS = join(HOME, 'notifications');
 export const PUBS = join(HOME, 'publications');
 const BLOCKS = join(HOME, 'blocks');
-for (const d of [DOCS, THEMES, TRASH, NOTIFS, PUBS, BLOCKS]) mkdirSync(d, { recursive: true });
+const BRANDS = join(HOME, 'brands');
+export const PLUGINS = join(HOME, 'plugins');
+export const MAILQ = join(HOME, 'mailqueue');
+for (const d of [DOCS, THEMES, TRASH, NOTIFS, PUBS, BLOCKS, BRANDS, PLUGINS, MAILQ]) mkdirSync(d, { recursive: true });
 
 export class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
 
@@ -59,11 +67,13 @@ export interface DocMetaFile {
   version?: number;                     // dernière version enregistrée
   publications?: PublicationRef[];
   branchOf?: { docId: string; baseVersion: number; base: string; name: string };
+  space?: string;                       // espace d'équipe auquel le document appartient
+  spaceRole?: Exclude<Role, 'owner'>;   // rôle donné aux membres de l'espace
 }
 
 export interface DocSummary {
   id: string; name: string; project: string; mode: string; templateId: string; role: Role;
-  createdAt: string; updatedAt: string; words: number; size: number; state: string; owner?: string; shared: boolean;
+  createdAt: string; updatedAt: string; words: number; size: number; state: string; owner?: string; shared: boolean; space?: string;
 }
 
 export interface Version {
@@ -74,7 +84,7 @@ export interface Version {
 
 export interface Comment {
   id: string; kind: 'comment' | 'suggestion';
-  anchor: { start?: unknown; end?: unknown; quote: string; line: number; slide?: number; page?: number };
+  anchor: { start?: unknown; end?: unknown; quote: string; line: number; slide?: number; page?: number; rect?: { x: number; y: number; w: number; h: number }; excerpt?: string };
   body: string; replacement?: string;
   author: string; authorName: string; at: string;
   replies: { id: string; author: string; authorName: string; body: string; at: string }[];
@@ -120,15 +130,21 @@ export const writeMarkdownFile = (id: string, md: string) => writeAtomic(join(di
 
 /* ---------- Droits ---------- */
 
-export interface Access { role: Role | null; via: 'owner' | 'member' | 'link' | null; link?: ShareLink }
+export interface Access { role: Role | null; via: 'owner' | 'member' | 'space' | 'link' | null; link?: ShareLink }
 
-/** Rôle effectif : membre ou propriétaire, et lien de partage valide s'il est présenté. */
+/** Rôle effectif : propriétaire, membre, membre de l'espace du document, et lien de partage valide s'il est présenté. */
 export function accessOf(m: DocMetaFile, userId: string | null, shareToken?: string | null): Access {
   let role: Role | null = null;
   let via: Access['via'] = null;
   if (userId && m.owner === userId) return { role: 'owner', via: 'owner' };
   const mem = userId ? m.members?.find(x => x.userId === userId) : undefined;
   if (mem) { role = mem.role; via = 'member'; }
+  const sm = userId && m.space ? getSpace(m.space)?.members.find(x => x.userId === userId) : undefined;
+  if (sm) {
+    // l'administrateur d'un espace édite tous ses documents ; les membres reçoivent le rôle fixé par le document
+    const r = maxRole(role, sm.role === 'admin' ? 'editor' : m.spaceRole || 'editor');
+    if (r !== role) { role = r; via = 'space'; }
+  }
   const link = shareToken ? m.links?.find(l => l.token === shareToken) : undefined;
   if (link && !link.revoked && (!link.expiresAt || new Date(link.expiresAt).getTime() > Date.now()) && (!link.requireLogin || userId)) {
     const r = maxRole(role, link.role);
@@ -162,7 +178,7 @@ export function listDocs(userId: string): DocSummary[] {
       out.push({
         id, name: m.name, project: m.project || '', mode: m.settings.mode || 'reading', templateId: m.settings.templateId || 'corporate', role: a.role,
         createdAt: m.createdAt, updatedAt: m.updatedAt, words: words(md), size: md.length, state: (m.workflow || DEFAULT_WORKFLOW).state,
-        owner: m.owner, shared: !!(m.members?.length || m.links?.some(l => !l.revoked)),
+        owner: m.owner, shared: !!(m.members?.length || m.links?.some(l => !l.revoked)), space: m.space,
       });
     } catch { /* dossier corrompu : ignoré dans la liste, laissé intact sur disque */ }
   }
@@ -348,12 +364,29 @@ export function addComment(id: string, c: Omit<Comment, 'id' | 'at' | 'replies' 
 
 const nfile = (userId: string) => join(NOTIFS, `${userId.replace(/[^\w-]/g, '')}.json`);
 export const listNotifications = (userId: string): Notification[] => readJson(nfile(userId), []);
+export type Delivery = (userId: string, n: Notification) => 'off' | 'app' | 'email';
+let delivery: Delivery = () => 'app';
+let emailHook: (userId: string, n: Notification) => void = () => {};
+/** Les préférences de chaque compte décident du canal ; l'e-mail est confié au serveur (app.ts). */
+export function setDelivery(d: Delivery, email: (userId: string, n: Notification) => void) { delivery = d; emailHook = email; }
 export function notify(userId: string, n: Omit<Notification, 'id' | 'at' | 'read'>) {
   if (!userId || userId.startsWith('guest:') || userId === n.actor) return;
+  const full: Notification = { ...n, id: rid(5), at: now(), read: false };
+  const ch = delivery(userId, full);
+  if (ch === 'off') return;
   const list = listNotifications(userId);
-  list.unshift({ ...n, id: rid(5), at: now(), read: false });
+  list.unshift(full);
   writeAtomic(nfile(userId), JSON.stringify(list.slice(0, 300), null, 2));
+  if (ch === 'email') emailHook(userId, full);
 }
+
+/* ---------- Résumé quotidien ---------- */
+
+const qfile = (userId: string) => join(MAILQ, `${userId.replace(/[^\w-]/g, '')}.json`);
+export const readQueue = (userId: string): { since: string; items: Notification[] } => readJson(qfile(userId), { since: now(), items: [] });
+export function enqueue(userId: string, n: Notification) { const q = readQueue(userId); q.items.push(n); writeAtomic(qfile(userId), JSON.stringify(q)); }
+export function takeQueue(userId: string) { const q = readQueue(userId); writeAtomic(qfile(userId), JSON.stringify({ since: now(), items: [] })); return q; }
+export const queuedUsers = () => readdirSync(MAILQ).filter(f => f.endsWith('.json')).map(f => f.slice(0, -5));
 export function markNotifications(userId: string, ids: string[] | 'all') {
   const list = listNotifications(userId).map(n => (ids === 'all' || ids.includes(n.id) ? { ...n, read: true } : n));
   writeAtomic(nfile(userId), JSON.stringify(list, null, 2));
@@ -361,18 +394,22 @@ export function markNotifications(userId: string, ids: string[] | 'all') {
 
 /* ---------- Blocs réutilisables ---------- */
 
-export interface StoredBlock extends LibBlock { owner: string; shared: boolean }
+export interface StoredBlock extends LibBlock { owner: string; shared: boolean; space?: string }
+/** Visible : à son auteur ; aux membres de son espace ; à tous si partagé sans espace. */
+export const visibleTo = (x: { owner: string; shared?: boolean; space?: string }, userId: string) =>
+  x.owner === userId || (x.space ? !!getSpace(x.space)?.members.some(m => m.userId === userId) : x.shared !== false);
 export const listBlocks = (userId: string): StoredBlock[] =>
   readdirSync(BLOCKS).filter(f => f.endsWith('.json')).map(f => readJson<StoredBlock | null>(join(BLOCKS, f), null))
-    .filter((b): b is StoredBlock => !!b && (b.owner === userId || b.shared)).sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+    .filter((b): b is StoredBlock => !!b && visibleTo(b, userId)).sort((a, b) => a.name.localeCompare(b.name, 'fr'));
 export const getBlock = (id: string): StoredBlock | undefined => (ID.test(id) ? readJson<StoredBlock | undefined>(join(BLOCKS, `${id}.json`), undefined) : undefined);
-export function saveBlock(input: { id?: string; name: string; description?: string; markdown: string; shared?: boolean }, userId: string): StoredBlock {
+export function saveBlock(input: { id?: string; name: string; description?: string; markdown: string; shared?: boolean; space?: string | null }, userId: string): StoredBlock {
   const existing = input.id ? getBlock(input.id) : undefined;
   if (existing && existing.owner !== userId) throw new HttpError(403, 'Seul l\'auteur du bloc peut le modifier.');
   const b: StoredBlock = existing ?? { id: `${slugify(input.name).slice(0, 40)}-${rid(2)}`, name: input.name.trim().slice(0, 80) || 'Bloc', versions: [], updatedAt: now(), owner: userId, shared: input.shared ?? true };
   if (input.description !== undefined) b.description = input.description.slice(0, 300);
   if (input.name?.trim()) b.name = input.name.trim().slice(0, 80);
   if (input.shared !== undefined) b.shared = input.shared;
+  if (input.space !== undefined) b.space = checkSpaceMember(input.space, userId);
   const last = b.versions[b.versions.length - 1];
   if (!last || last.markdown !== input.markdown) b.versions.push({ version: (last?.version || 0) + 1, markdown: input.markdown, at: now(), author: userId });
   b.updatedAt = now();
@@ -388,16 +425,17 @@ export function deleteBlock(id: string, userId: string) {
 
 /* ---------- Gabarits personnalisés ---------- */
 
-export function listThemes(): Template[] {
+/** Gabarits personnels : communs au serveur, sauf ceux rangés dans un espace (visibles de ses membres). */
+export function listThemes(userId?: string): Template[] {
   return readdirSync(THEMES).filter(f => f.endsWith('.json')).flatMap(f => {
     try { return [JSON.parse(readFileSync(join(THEMES, f), 'utf8'))]; } catch { return []; }
-  });
+  }).filter((t: Template & { space?: string }) => !t.space || userId === undefined || !!getSpace(t.space)?.members.some(m => m.userId === userId));
 }
 
-export function saveTheme(t: Template): Template {
+export function saveTheme(t: Template & { space?: string | null }, userId?: string): Template {
   if (!t || typeof t !== 'object' || !t.tokens) throw new HttpError(400, 'Gabarit invalide : « tokens » manquant.');
   const id = t.id && ID.test(t.id) && !t.builtin ? t.id : `${slugify(t.name || 'gabarit').slice(0, 40)}-${rid(3)}`;
-  const clean: Template = { ...t, id, builtin: false, name: String(t.name || 'Gabarit').slice(0, 80) };
+  const clean: Template & { space?: string } = { ...t, id, builtin: false, name: String(t.name || 'Gabarit').slice(0, 80), space: userId && t.space ? checkSpaceMember(t.space, userId) : undefined };
   writeFileSync(join(THEMES, id + '.json'), JSON.stringify(clean, null, 2));
   return clean;
 }
@@ -407,6 +445,126 @@ export function deleteTheme(id: string) {
   const f = join(THEMES, id + '.json');
   if (existsSync(f)) rmSync(f);
 }
+
+/* ---------- Espaces d'équipe ---------- */
+
+export interface SpaceMember { userId: string; role: 'admin' | 'member'; addedAt: string }
+export interface Space { id: string; name: string; description?: string; createdAt: string; createdBy: string; members: SpaceMember[]; invites: { email: string; role: 'admin' | 'member'; at: string }[] }
+const SPACES = join(HOME, 'spaces.json');
+export const listSpaces = (): Space[] => readJson(SPACES, []);
+export const getSpace = (id: string) => listSpaces().find(s => s.id === id);
+export const spacesOf = (userId: string) => listSpaces().filter(s => s.members.some(m => m.userId === userId));
+export function mutateSpaces(fn: (list: Space[]) => void) { const l = listSpaces(); fn(l); writeAtomic(SPACES, JSON.stringify(l, null, 2)); return l; }
+/** Vérifie qu'on range un objet dans un espace dont on est membre ; null retire l'espace. */
+export function checkSpaceMember(space: string | null | undefined, userId: string): string | undefined {
+  if (!space) return undefined;
+  if (!getSpace(space)?.members.some(m => m.userId === userId)) throw new HttpError(403, 'Vous n\'êtes pas membre de cet espace.');
+  return space;
+}
+export const docsInSpace = (space: string) => readdirSync(DOCS).filter(id => readJson<DocMetaFile | null>(join(DOCS, id, 'studio.json'), null)?.space === space);
+
+/* ---------- Identités visuelles ---------- */
+
+const bfile = (id: string) => join(BRANDS, `${id}.json`);
+export const brandDir = (id: string) => { if (!ID.test(id)) throw new HttpError(400, 'Identifiant invalide.'); return join(BRANDS, id); };
+export const getBrand = (id: string): Brand | undefined => (ID.test(id) ? readJson<Brand | undefined>(bfile(id), undefined) : undefined);
+export const listBrands = (userId: string): Brand[] =>
+  readdirSync(BRANDS).filter(f => f.endsWith('.json')).map(f => readJson<Brand | null>(join(BRANDS, f), null))
+    .filter((b): b is Brand => !!b && visibleTo(b, userId)).sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+/** Modifier une identité : son auteur, ou un administrateur de son espace. */
+export const canEditBrand = (b: Brand, userId: string) => b.owner === userId || (!!b.space && !!getSpace(b.space)?.members.some(m => m.userId === userId && m.role === 'admin'));
+export function saveBrand(input: Partial<Brand>, userId: string): Brand {
+  const prev = input.id ? getBrand(input.id) : undefined;
+  if (prev && !canEditBrand(prev, userId)) throw new HttpError(403, 'Seuls l\'auteur et les administrateurs de l\'espace modifient cette identité.');
+  const str = (v: unknown, n = 120) => String(v ?? '').slice(0, n);
+  const colors = Object.fromEntries(Object.entries(input.colors ?? prev?.colors ?? {}).filter(([, v]) => /^#[0-9a-f]{3,8}$/i.test(String(v))));
+  const fonts = Object.fromEntries(Object.entries(input.fonts ?? prev?.fonts ?? {}).filter(([k, v]) => ['heading', 'body', 'mono'].includes(k) && v).map(([k, v]) => [k, str(v, 80)]));
+  const hf = (x: any) => (x ? { left: str(x.left, 200), center: str(x.center, 200), right: str(x.right, 200) } : undefined);
+  const next: Brand = {
+    id: prev?.id || `${slugify(input.name || 'identite').slice(0, 40)}-${rid(2)}`,
+    name: str(input.name ?? prev?.name, 80).trim() || 'Identité', description: input.description !== undefined ? str(input.description, 300) : prev?.description,
+    version: prev?.version || 0, updatedAt: now(), owner: prev?.owner || userId,
+    space: input.space !== undefined ? checkSpaceMember(input.space, userId) : prev?.space,
+    colors, fonts: fonts as Brand['fonts'], templateId: input.templateId !== undefined ? str(input.templateId, 80) || undefined : prev?.templateId,
+    logos: (input.logos ?? prev?.logos ?? []).filter(l => l && typeof l.file === 'string').map(l => ({ file: safeAssetName(l.file), label: str(l.label, 60) })),
+    cover: input.cover !== undefined ? str(input.cover, 4000) || undefined : prev?.cover,
+    header: input.header !== undefined ? hf(input.header) : prev?.header, footer: input.footer !== undefined ? hf(input.footer) : prev?.footer,
+    organization: input.organization !== undefined ? str(input.organization, 120) || undefined : prev?.organization,
+    history: prev?.history || [],
+  };
+  const summary = brandSummary(prev, next);
+  if (!prev || summary !== 'aucun changement visible') {
+    next.version += 1;
+    next.history = [...next.history, { version: next.version, at: next.updatedAt, author: userId, summary }].slice(-100);
+  }
+  writeAtomic(bfile(next.id), JSON.stringify(next, null, 2));
+  return next;
+}
+export function deleteBrand(id: string, userId: string) {
+  const b = getBrand(id);
+  if (!b) return;
+  if (!canEditBrand(b, userId)) throw new HttpError(403, 'Seuls l\'auteur et les administrateurs de l\'espace suppriment cette identité.');
+  rmSync(bfile(id));
+  if (existsSync(brandDir(id))) renameSync(brandDir(id), join(TRASH, `brand-${id}-${Date.now()}`));
+}
+
+/* ---------- Plugins ---------- */
+
+export const listPluginFiles = (): unknown[] => readdirSync(PLUGINS).filter(f => f.endsWith('.json')).sort().flatMap(f => { const p = readJson<unknown>(join(PLUGINS, f), null); return p ? [p] : []; });
+export function savePluginFile(p: { id: string }) { writeAtomic(join(PLUGINS, `${p.id}.json`), JSON.stringify(p, null, 2)); }
+export function deletePluginFile(id: string) { if (!ID.test(id)) throw new HttpError(400, 'Identifiant invalide.'); const f = join(PLUGINS, `${id}.json`); if (existsSync(f)) rmSync(f); }
+
+/* ---------- Modèles de validation ---------- */
+
+const WFT = join(HOME, 'workflow-templates.json');
+export const listWorkflowTemplates = (userId: string): WorkflowTemplate[] => readJson<WorkflowTemplate[]>(WFT, []).filter(t => visibleTo({ ...t, shared: false }, userId));
+export function saveWorkflowTemplate(input: Partial<WorkflowTemplate>, userId: string, validUser: (id: string) => boolean): WorkflowTemplate {
+  const all = readJson<WorkflowTemplate[]>(WFT, []);
+  const prev = input.id ? all.find(t => t.id === input.id) : undefined;
+  if (prev && prev.owner !== userId) throw new HttpError(403, 'Seul l\'auteur du modèle peut le modifier.');
+  const reviewers = [...new Set((input.reviewers || []).filter(validUser))];
+  if (!reviewers.length) throw new HttpError(400, 'Un modèle de validation compte au moins un relecteur.');
+  const t: WorkflowTemplate = {
+    id: prev?.id || rid(4), name: String(input.name || '').trim().slice(0, 80) || 'Modèle de validation', reviewers,
+    requiredApprovals: Math.max(0, Math.min(reviewers.length, Number(input.requiredApprovals) || 0)), owner: prev?.owner || userId,
+    space: input.space !== undefined ? checkSpaceMember(input.space, userId) : prev?.space, updatedAt: now(),
+  };
+  writeAtomic(WFT, JSON.stringify([...all.filter(x => x.id !== t.id), t], null, 2));
+  return t;
+}
+export function deleteWorkflowTemplate(id: string, userId: string) {
+  const all = readJson<WorkflowTemplate[]>(WFT, []);
+  const t = all.find(x => x.id === id);
+  if (t && t.owner !== userId) throw new HttpError(403, 'Seul l\'auteur du modèle peut le supprimer.');
+  writeAtomic(WFT, JSON.stringify(all.filter(x => x.id !== id), null, 2));
+}
+
+/* ---------- Statistiques de consultation des publications ---------- */
+// Aucune donnée personnelle : ni adresse IP ni identifiant. Les visiteurs uniques du jour sont comptés
+// par une empreinte salée d'un sel tiré au hasard chaque jour et jamais écrit sur disque.
+
+export interface PubStats { total: number; formats: Record<string, number>; days: Record<string, { views: number; visitors: number }>; last?: string }
+const salt = { day: '', value: '' };
+const seenToday = new Map<string, Set<string>>();
+export function recordView(pubId: string, format: string, fingerprint: string) {
+  const day = now().slice(0, 10);
+  if (salt.day !== day) { salt.day = day; salt.value = rid(16); seenToday.clear(); }
+  const f = join(PUBS, pubId, 'stats.json');
+  const st = readJson<PubStats>(f, { total: 0, formats: {}, days: {} });
+  st.total += 1;
+  st.formats[format] = (st.formats[format] || 0) + 1;
+  const d = (st.days[day] ||= { views: 0, visitors: 0 });
+  d.views += 1;
+  const h = createHash('sha256').update(salt.value + fingerprint).digest('hex').slice(0, 16);
+  const set = seenToday.get(pubId) || new Set<string>();
+  if (!set.has(h)) { set.add(h); d.visitors += 1; seenToday.set(pubId, set); }
+  st.last = now();
+  // 400 jours au plus
+  const keys = Object.keys(st.days).sort();
+  for (const k of keys.slice(0, Math.max(0, keys.length - 400))) delete st.days[k];
+  writeAtomic(f, JSON.stringify(st));
+}
+export const pubStats = (pubId: string): PubStats => readJson(join(PUBS, pubId, 'stats.json'), { total: 0, formats: {}, days: {} });
 
 /* ---------- Migration : documents d'avant les comptes ---------- */
 

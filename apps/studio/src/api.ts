@@ -2,21 +2,25 @@
 //  - « server » : le serveur local (fichiers sur disque, PDF par Chrome) ;
 //  - « browser » : tout dans le navigateur (IndexedDB), pour l'édition web hébergée.
 // Le choix se fait au démarrage : serveur joignable -> server, sinon browser.
-import type { DocSettings, Template } from '@studio/engine';
+import type { Brand, ComponentPlugin, DocSettings, NotifCategory, NotifChannel, Template, WorkflowTemplate } from '@studio/engine';
 
-export interface DocSummary { id: string; name: string; project: string; mode: string; templateId: string; createdAt: string; updatedAt: string; words: number; size: number }
+export interface DocSummary { id: string; name: string; project: string; mode: string; templateId: string; createdAt: string; updatedAt: string; words: number; size: number; space?: string; role?: Role }
 export interface Asset { name: string; size: number }
 export interface Doc extends Partial<Collab> { id: string; name: string; project: string; settings: Partial<DocSettings>; markdown: string; assets: Asset[]; hasOriginal: boolean; createdAt: string; updatedAt: string; importedFrom?: string }
 export type Role = 'viewer' | 'commenter' | 'editor' | 'owner';
-export interface Me { id: string; name: string; email: string; color: string }
-export interface Member { userId: string; role: Role; user: Me | null }
+export interface Me { id: string; name: string; email: string; color: string; admin?: boolean }
+export interface Member { userId: string; role: Role; user: Me | null; viaSpace?: boolean }
+export interface Prefs { notify: Record<NotifCategory, NotifChannel>; digest: 'immediate' | 'daily' }
+export interface Space { id: string; name: string; description?: string; myRole?: 'admin' | 'member'; members: { userId: string; role: 'admin' | 'member'; user: Me | null }[]; invites: { email: string; role: string }[]; documents: number }
+export interface PubStats { total: number; formats: Record<string, number>; days: Record<string, { views: number; visitors: number }>; last?: string }
+export type BrandOut = Brand & { canEdit: boolean };
 export interface ShareLink { id: string; token: string; role: Exclude<Role, 'owner'>; label?: string; expiresAt?: string; revoked?: boolean; requireLogin?: boolean; allowDownload: boolean; createdAt: string }
-export interface Publication { id: string; version: number; at: string; by: string; visibility: 'public' | 'members'; revoked?: boolean; label?: string; official: boolean; stale?: boolean }
+export interface Publication { id: string; version: number; at: string; by: string; visibility: 'public' | 'members'; revoked?: boolean; label?: string; official: boolean; stale?: boolean; views?: number }
 export interface Workflow { state: 'draft' | 'review' | 'changes' | 'pending' | 'approved' | 'published' | 'archived'; reviewers: { userId: string; decision: 'pending' | 'approved' | 'changes'; at?: string; note?: string }[]; requiredApprovals: number; approvedVersion?: number }
 export interface VersionInfo { n: number; at: string; authors: string[]; authorNames: string[]; kind: string; label?: string; summary: string; added: number; removed: number; restoredFrom?: number }
 export interface Version extends VersionInfo { markdown: string; settings: Partial<DocSettings> }
 export interface Comment {
-  id: string; kind: 'comment' | 'suggestion'; anchor: { start?: unknown; end?: unknown; quote: string; line: number; slide?: number };
+  id: string; kind: 'comment' | 'suggestion'; anchor: { start?: unknown; end?: unknown; quote: string; line: number; slide?: number; page?: number; rect?: { x: number; y: number; w: number; h: number }; excerpt?: string };
   body: string; replacement?: string; author: string; authorName: string; at: string;
   replies: { id: string; author: string; authorName: string; body: string; at: string }[];
   assignee?: string; mentions: string[]; status: 'open' | 'resolved' | 'accepted' | 'rejected'; decidedBy?: string; decidedAt?: string;
@@ -27,6 +31,7 @@ export interface Block { id: string; name: string; description?: string; owner: 
 export interface Collab {
   role: Role; members: Member[]; links?: ShareLink[]; invites?: { email: string; role: Role }[]; publications: Publication[];
   workflow: Workflow; version: number; branchOf?: { docId: string; baseVersion: number; name: string }; owner?: string;
+  space?: { id: string; name: string; role: Exclude<Role, 'owner'> };
 }
 
 export interface ExportRequest { format: string; mode: string; settings?: Partial<DocSettings>; markdown?: string; pdf?: boolean }
@@ -58,6 +63,10 @@ export interface Backend {
   exportFile(id: string, body: ExportRequest): Promise<ExportResult>;
   source(id: string, original: boolean): Promise<{ blob: Blob; name: string }>;
   settingsFile(id: string): Promise<{ blob: Blob; name: string }>;
+  /** Plugins de composants : installés sur le serveur (administrateur) ou dans ce navigateur. */
+  plugins(): Promise<ComponentPlugin[]>;
+  installPlugin(p: unknown): Promise<ComponentPlugin[]>;
+  removePlugin(id: string): Promise<ComponentPlugin[]>;
 }
 
 /** Jeton du lien de partage par lequel on est entré (envoyé à chaque requête). */
@@ -109,16 +118,19 @@ function serverBackend(home: string): Backend {
     },
     source: async (id, original) => fileFrom(await call<Response>('GET', `/api/docs/${id}/source${original ? '?original=1' : ''}`, undefined, true)),
     settingsFile: async id => fileFrom(await call<Response>('GET', `/api/docs/${id}/settings`, undefined, true)),
+    plugins: () => call('GET', '/api/plugins'),
+    installPlugin: p => call('POST', '/api/plugins', p),
+    removePlugin: id => call('DELETE', `/api/plugins/${id}`),
   };
 }
 
 /** Fonctions collaboratives (serveur uniquement). */
 export const collab = {
-  state: () => call<{ hasUsers: boolean; me: Me | null }>('GET', '/api/auth/state'),
+  state: () => call<{ hasUsers: boolean; me: Me | null; prefs: Prefs | null; mail: boolean }>('GET', '/api/auth/state'),
   register: (b: { name: string; email: string; password: string }) => call<{ me: Me }>('POST', '/api/auth/register', b),
   login: (b: { email: string; password: string }) => call<{ me: Me }>('POST', '/api/auth/login', b),
   logout: () => call('POST', '/api/auth/logout'),
-  updateMe: (b: { name?: string; color?: string }) => call<{ me: Me }>('PUT', '/api/auth/me', b),
+  updateMe: (b: { name?: string; color?: string; prefs?: Partial<Prefs> }) => call<{ me: Me; prefs: Prefs }>('PUT', '/api/auth/me', b),
   users: (q: string) => call<Me[]>('GET', `/api/users?q=${encodeURIComponent(q)}`),
   share: (token: string) => call<{ docId: string; role: Role; name: string; requireLogin: boolean }>('GET', `/api/share/${token}`),
   addMember: (id: string, email: string, role: Role) => call<Doc>('POST', `/api/docs/${id}/members`, { email, role }),
@@ -148,6 +160,24 @@ export const collab = {
   blocks: () => call<Block[]>('GET', '/api/blocks'),
   saveBlock: (b: { id?: string; name: string; markdown: string; description?: string; shared?: boolean }) => call<Block>('POST', '/api/blocks', b),
   deleteBlock: (id: string) => call('DELETE', `/api/blocks/${id}`),
+  spaces: () => call<Space[]>('GET', '/api/spaces'),
+  createSpace: (name: string, description?: string) => call<Space>('POST', '/api/spaces', { name, description }),
+  patchSpace: (sid: string, b: { name?: string; description?: string }) => call<Space>('PATCH', `/api/spaces/${sid}`, b),
+  deleteSpace: (sid: string) => call('DELETE', `/api/spaces/${sid}`),
+  addSpaceMember: (sid: string, email: string, role: 'admin' | 'member') => call<Space>('POST', `/api/spaces/${sid}/members`, { email, role }),
+  setSpaceMember: (sid: string, uid: string, role: 'admin' | 'member') => call<Space>('PATCH', `/api/spaces/${sid}/members/${uid}`, { role }),
+  removeSpaceMember: (sid: string, uid: string) => call<Space | { ok: true }>('DELETE', `/api/spaces/${sid}/members/${encodeURIComponent(uid)}`),
+  docSpace: (id: string, space: string | null, role?: string) => call<Doc>('PUT', `/api/docs/${id}/space`, { space, role }),
+  brands: () => call<BrandOut[]>('GET', '/api/brands'),
+  saveBrand: (b: Partial<Brand>) => call<BrandOut>('POST', '/api/brands', b),
+  deleteBrand: (id: string) => call('DELETE', `/api/brands/${id}`),
+  brandLogo: (id: string, name: string, data: Blob) => call<BrandOut>('PUT', `/api/brands/${id}/assets/${encodeURIComponent(name)}`, data),
+  brandAssetUrl: (id: string, name: string) => `/api/brands/${id}/assets/${encodeURIComponent(name)}`,
+  applyBrand: (id: string, brand: string, cover: boolean) => call<{ settings: Partial<DocSettings>; assets: Asset[] }>('POST', `/api/docs/${id}/brand`, { brand, cover }),
+  workflowTemplates: () => call<WorkflowTemplate[]>('GET', '/api/workflow-templates'),
+  saveWorkflowTemplate: (t: Partial<WorkflowTemplate>) => call<WorkflowTemplate>('POST', '/api/workflow-templates', t),
+  deleteWorkflowTemplate: (id: string) => call('DELETE', `/api/workflow-templates/${id}`),
+  pubStats: (id: string, pid: string) => call<PubStats>('GET', `/api/docs/${id}/publications/${pid}/stats`),
 };
 
 let current: Backend | null = null;
@@ -187,6 +217,9 @@ export const api: Omit<Backend, 'kind' | 'home' | 'pdf' | 'collab'> & { readonly
   exportFile: (id, b) => be().exportFile(id, b),
   source: (id, o) => be().source(id, o),
   settingsFile: id => be().settingsFile(id),
+  plugins: () => be().plugins(),
+  installPlugin: p => be().installPlugin(p),
+  removePlugin: id => be().removePlugin(id),
 };
 
 export function download(blob: Blob, name: string) {

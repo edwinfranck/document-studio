@@ -8,6 +8,7 @@ import { parse, sortDiags, textOf } from './parse.ts';
 import { isDark, resolveTheme, schemeCss, themeClasses, tokensCss, type ResolvedTheme } from './themes.ts';
 import * as A from './assets.gen.ts';
 import type { LibBlock as LibraryBlock } from './collab.ts';
+import { pluginCss } from './plugins.ts';
 
 export interface RenderResult {
   html: string;
@@ -69,6 +70,7 @@ ${A.code_css}
 ${targetCss}
 ${extraCss}</style>
 ${theme.css ? `<style data-template="${esc(theme.template.id)}">${theme.css}</style>` : ''}
+${ctx.plugins.size ? `<style data-plugins>${pluginCss(ctx.plugins, sanitizeCss)}</style>` : ''}
 ${custom ? `<style data-custom>${custom}</style>` : ''}`;
 }
 

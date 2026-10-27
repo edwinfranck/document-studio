@@ -23,6 +23,10 @@ interface State {
   /** Connexion temps réel : présente, le texte et les réglages passent par Yjs (pas de sauvegarde par requête). */
   provider: Provider | null;
   me: import('./api.ts').Me | null;
+  prefs: import('./api.ts').Prefs | null;
+  mailEnabled: boolean;
+  /** Change quand les plugins installés changent : l'aperçu se recalcule. */
+  pluginsRev: number;
   currentSlide: number;
   // annuler / rétablir : le texte vit dans CodeMirror, les réglages ici.
   undoLog: ('text' | 'settings')[];
@@ -77,7 +81,7 @@ export const useStudio = create<State>((set, get) => {
 
   return {
     doc: null, markdown: '', settings: withDefaults({}), save: 'saved', saveError: '',
-    templates: BUILTIN_TEMPLATES, userTemplates: [], diagnostics: [], runtime: [], selectedLine: null, toasts: [], provider: null, me: null, currentSlide: 0,
+    templates: BUILTIN_TEMPLATES, userTemplates: [], diagnostics: [], runtime: [], selectedLine: null, toasts: [], provider: null, me: null, prefs: null, mailEnabled: false, pluginsRev: 0, currentSlide: 0,
     undoLog: [], redoLog: [], settingsPast: [], settingsFuture: [],
     open: doc => set({ doc, markdown: doc.markdown, settings: withDefaults(doc.settings), save: 'saved', undoLog: [], redoLog: [], settingsPast: [], settingsFuture: [], runtime: [], selectedLine: null }),
     close: () => { clearTimeout(timer); if (get().save === 'dirty') flush(); set({ doc: null, provider: null }); },

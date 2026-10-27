@@ -2,23 +2,24 @@
 
 Des fichiers Markdown vers des documents soignés : **page de lecture HTML**, **PDF paginé** et **diaporama HTML**, à partir du même texte. Le contenu ne change jamais quand on change de présentation.
 
-*Turn plain Markdown into a polished reading page, a paginated PDF or an HTML slide deck, from the same source. 12 templates, live preview, a Markdown extension for layout components (StudioMD). French UI. MIT.*
+*Turn plain Markdown into a polished reading page, a paginated PDF or an HTML slide deck, from the same source. 12 templates, live preview, a Markdown extension for layout components (StudioMD), real-time collaboration, desktop app, Docker image. French UI. MIT.*
 
 **Essayer en ligne : https://document-studio-gules.vercel.app** (édition web, voir plus bas)
 
-## Deux éditions
+## Trois éditions
 
-| | Serveur (`pnpm start`) | Édition web (Vercel) |
-|---|---|---|
-| Documents | fichiers ordinaires dans `~/DocumentStudio` | dans le navigateur (IndexedDB), sur cet appareil seulement |
-| Comptes, partage, rôles, liens révocables | oui | non |
-| Édition simultanée, commentaires, suggestions | oui | non |
-| Versions signées, comparaison, validation, publication | oui | historique local seulement |
-| PDF | généré par Chrome, téléchargé directement | boîte d'impression du navigateur : « Enregistrer au format PDF » |
-| HTML, diaporama, paquet ZIP | oui | oui, générés dans la page |
-| CLI `studio export` | oui | non |
+| | Serveur (`pnpm start`, Docker) | Application de bureau | Édition web (Vercel) |
+|---|---|---|---|
+| Documents | fichiers ordinaires dans `~/DocumentStudio` | idem, sur le poste | dans le navigateur (IndexedDB), sur cet appareil seulement |
+| Comptes, espaces d'équipe, partage, liens révocables | oui | oui | non |
+| Édition simultanée, commentaires, suggestions, zones de page | oui | oui | non |
+| Versions, validation, publication, consultations | oui | oui | historique local seulement |
+| Notifications par e-mail | oui (SMTP) | oui (SMTP) | non |
+| Identités visuelles, plugins | oui | oui | plugins seulement |
+| PDF | Chrome ou Chromium, téléchargé directement | Chromium d'Electron, rien à installer | boîte d'impression du navigateur |
+| HTML, diaporama, paquet ZIP | oui | oui | oui, générés dans la page |
 
-La collaboration est décrite dans [docs/collaboration.md](docs/collaboration.md), avec l'hébergement pour une équipe (réseau local ou serveur HTTPS).
+La collaboration est décrite dans [docs/collaboration.md](docs/collaboration.md), l'hébergement pour une équipe dans [docs/hebergement.md](docs/hebergement.md), les plugins dans [docs/plugins.md](docs/plugins.md).
 
 L'interface détecte seule le serveur local ; sans lui, elle bascule sur le stockage du navigateur. Aucun document ne quitte l'appareil dans l'édition web.
 
@@ -32,6 +33,12 @@ pnpm start        # version compilée, tout sur http://127.0.0.1:4317
 ```
 
 Les documents vivent dans `~/DocumentStudio` (variable `STUDIO_HOME` pour changer). Le PDF utilise Google Chrome installé (`STUDIO_CHROME=/chemin` sinon) : aucun service externe, rien ne part sur le réseau.
+
+```sh
+pnpm desktop          # application de bureau (Electron), lancée depuis le dépôt
+pnpm desktop:dist     # installable Linux : apps/desktop/dist/Document Studio-<version>.AppImage
+docker compose up -d  # serveur d'équipe derrière HTTPS (voir docs/hebergement.md)
+```
 
 ## En ligne de commande
 
@@ -71,9 +78,13 @@ Coller ou glisser une image dans la source l'ajoute au document et l'insère. An
 | D. Versions signées et regroupées, comparaison au mot, restauration non destructive, commentaires ancrés, suggestions, activité | fait, testé |
 | E. Validation éditoriale, publications liées à une version, publications obsolètes signalées, notifications dans l'application | fait, testé |
 | F. Blocs réutilisables versionnés, branches et fusion à trois voies, comparaison de deux gabarits | fait, testé |
-| Notifications par e-mail, commentaires sur une zone de page PDF, espaces d'équipe | **non construit** (voir docs/collaboration.md) |
+| G. Préférences de notification par catégorie, e-mails (immédiats ou résumé quotidien), invitations par e-mail | fait, testé |
+| H. Espaces d'équipe : membres, rôle par document, gabarits, identités, blocs et modèles partagés | fait, testé |
+| I. Identités visuelles versionnées (logos, couleurs, polices, couverture, pieds de page), mises à jour proposées | fait, testé |
+| J. Plugins de composants déclaratifs, nettoyés et échappés | fait, testé |
+| K. Mode suggestion (suivi des modifications en tapant), commentaires sur une zone de page, modèles de validation, consultations des publications | fait, testé |
 | Édition web hébergée (stockage navigateur, sans collaboration) | fait |
-| Application de bureau (Tauri) | non construit : le moteur est prêt à être habillé |
+| Application de bureau (Electron, PDF sans Chrome), image Docker, déploiement HTTPS | fait, vérifiés |
 
 12 gabarits : Éditorial, Documentation technique, Rapport corporate, Rapport de direction, Support pédagogique, Suisse, Académique, Brutaliste, KERNEL, Diapositives minimales, Cinématique, Formation.
 
@@ -89,7 +100,7 @@ vercel --prod             # la configuration est dans vercel.json
 ## Tests
 
 ```sh
-pnpm test                     # moteur (67) + serveur (52) : collaboration de bout en bout, exports PDF réels, non-régression visuelle
+pnpm test                     # moteur (79) + serveur (66) : collaboration et équipes de bout en bout, exports PDF réels, non-régression visuelle
 pnpm test:update-snapshots    # après un changement voulu d'un gabarit
 pnpm typecheck
 ```
@@ -103,10 +114,14 @@ Corpus dans `tests/fixtures/` : document simple, rapport long, tableaux larges, 
 | `packages/engine/` | moteur : analyse, IR, thèmes, rendu des trois sorties, CSS et scripts embarqués (`src/assets/`) |
 | `apps/server/` | stockage, API, exports, CLI (`bin/studio.mjs`) |
 | `apps/studio/` | interface |
+| `apps/desktop/` | application de bureau (Electron) |
+| `Dockerfile`, `docker-compose.yml`, `deploy/` | image du serveur, déploiement HTTPS avec Caddy |
 | `docs/studiomd.md` | grammaire StudioMD |
 | `docs/composants.md` | référence des composants (générée : `pnpm docs`) |
 | `docs/architecture.md` | pipeline, choix, données, sécurité |
-| `docs/collaboration.md` | rôles, temps réel, versions, commentaires, validation, publication, hébergement |
+| `docs/collaboration.md` | rôles, espaces, temps réel, versions, commentaires, suggestions, identités, notifications, validation, publication |
+| `docs/hebergement.md` | Docker, HTTPS, variables, e-mails, sauvegarde |
+| `docs/plugins.md` | format des plugins de composants |
 
 ## Licence
 

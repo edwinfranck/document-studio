@@ -5,7 +5,21 @@ import { existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+/** Application de bureau : le PDF est imprimé par le processus Electron parent (son Chromium), par IPC. */
+const viaParent = process.env.STUDIO_PDF_VIA_PARENT === '1' && typeof process.send === 'function';
+const waiting = new Map<number, { ok: (r: { pdf: Buffer; info: any }) => void; ko: (e: Error) => void }>();
+let seq = 0;
+if (viaParent) {
+  process.on('message', (m: any) => {
+    const w = m?.type === 'pdf-result' ? waiting.get(m.id) : undefined;
+    if (!w) return;
+    waiting.delete(m.id);
+    if (m.error) w.ko(new Error(m.error)); else w.ok({ pdf: Buffer.from(m.pdf, 'base64'), info: m.info });
+  });
+}
+
 export function findChrome(): string | null {
+  if (viaParent) return 'electron';
   const env = process.env.STUDIO_CHROME;
   if (env && existsSync(env)) return env;
   const candidates = [
@@ -30,7 +44,10 @@ export function getBrowser(): Promise<Browser> {
   if (!browser) {
     const executablePath = findChrome();
     if (!executablePath) throw new Error('Aucun Chrome/Chromium trouvé. Installez Google Chrome ou indiquez son chemin dans STUDIO_CHROME.');
-    browser = chromium.launch({ executablePath, args: ['--font-render-hinting=none', '--disable-gpu'] });
+    // En conteneur, le bac à sable de Chromium n'a pas les espaces de noms qu'il demande : STUDIO_CHROME_NO_SANDBOX=1.
+    // Les documents restent isolés : aucune requête réseau pendant un export.
+    const args = ['--font-render-hinting=none', '--disable-gpu', ...(process.env.STUDIO_CHROME_NO_SANDBOX === '1' ? ['--no-sandbox'] : [])];
+    browser = chromium.launch({ executablePath, args });
     browser.then(b => b.on('disconnected', () => { browser = null; }), () => { browser = null; });
   }
   return browser;
@@ -61,6 +78,7 @@ export async function loadDocument(html: string, kind: Kind, viewport = { width:
 }
 
 export async function htmlToPdf(html: string, kind: Exclude<Kind, 'reading'> | 'reading'): Promise<{ pdf: Buffer; info: any }> {
+  if (viaParent) return new Promise((ok, ko) => { const id = ++seq; waiting.set(id, { ok, ko }); process.send!({ type: 'pdf', id, html, kind }); });
   const { page, info } = await loadDocument(html, kind);
   try {
     if (kind === 'reading') await page.emulateMedia({ media: 'print' });

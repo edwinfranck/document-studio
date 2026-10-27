@@ -14,7 +14,8 @@ export interface AttrSpec {
 export interface ComponentSpec {
   name: string;
   aliases?: Record<string, Record<string, string>>;  // alias -> attributs implicites
-  category: 'Contenu' | 'Mise en page' | 'Présentation' | 'Rapport';
+  category: 'Contenu' | 'Mise en page' | 'Présentation' | 'Rapport' | 'Extensions';
+  plugin?: string;                // identifiant du plugin qui le déclare
   label: string;
   description: string;
   content: 'markdown' | 'data' | 'raw' | 'none';

@@ -17,11 +17,19 @@ export interface PreviewProps {
   onSelect(line: number): void;
   /** Mobile : barre d'outils réduite. */
   compact?: boolean;
+  /** Commentaires sur une zone de page (impression) : tracé actif, zones affichées, zone choisie. */
+  zoneMode?: boolean;
+  zones?: PageZone[];
+  zoneFocus?: { id: string; n: number } | null;
+  onZone?(z: { page: number; rect: { x: number; y: number; w: number; h: number }; line: number; excerpt: string }): void;
+  onZoneClick?(id: string): void;
 }
+
+export interface PageZone { id: string; page: number; rect: { x: number; y: number; w: number; h: number }; n: number; active: boolean; title?: string }
 
 type Device = 'full' | 'tablet' | 'mobile';
 
-export function Preview({ html, mode, pageWidthMm, slideSize, scrollRequest, onSelect, compact }: PreviewProps) {
+export function Preview({ html, mode, pageWidthMm, slideSize, scrollRequest, onSelect, compact, zoneMode, zones, zoneFocus, onZone, onZoneClick }: PreviewProps) {
   const frames = [useRef<HTMLIFrameElement>(null), useRef<HTMLIFrameElement>(null)];
   const stageRef = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState(0);
@@ -75,6 +83,7 @@ export function Preview({ html, mode, pageWidthMm, slideSize, scrollRequest, onS
       if (m.type === 'sd:ready' && isPending && mode !== 'slides') win.postMessage({ type: 'sd:restore', y: scrollY.current }, '*');
       if (m.type === 'sd:paged') {
         win.postMessage({ type: 'sd:restore', y: scrollY.current }, '*');
+        syncZones(win);
         if (isPending || idx === activeRef.current) {
           setInfo({ pages: m.pages, overflows: m.overflows, error: m.error });
           useStudio.setState({ runtime: (m.overflows || []).map((o: any) => ({ line: o.line, severity: 'warning', message: `Page ${o.page} : ${o.kind === 'table' ? 'tableau' : o.kind === 'pre' ? 'bloc de code' : 'élément'} plus large que la zone imprimable.` })) });
@@ -94,11 +103,22 @@ export function Preview({ html, mode, pageWidthMm, slideSize, scrollRequest, onS
       if (idx !== activeRef.current) return;
       if (m.type === 'sd:scroll') scrollY.current = m.y;
       if (m.type === 'sd:select') onSelect(m.line);
+      if (m.type === 'sd:zone') onZone?.({ page: m.page, rect: m.rect, line: m.line, excerpt: m.excerpt });
+      if (m.type === 'sd:zoneClick') onZoneClick?.(m.id);
       if (m.type === 'sd:link' && /^https?:/i.test(m.href)) window.open(m.href, '_blank', 'noopener,noreferrer');
     };
     window.addEventListener('message', onMsg);
     return () => window.removeEventListener('message', onMsg);
   });
+
+  const zonesRef = useRef({ zones, zoneMode });
+  zonesRef.current = { zones, zoneMode };
+  const syncZones = (win: Window) => {
+    win.postMessage({ type: 'sd:zones', zones: mode === 'print' ? zonesRef.current.zones || [] : [] }, '*');
+    win.postMessage({ type: 'sd:zoneMode', on: mode === 'print' && !!zonesRef.current.zoneMode }, '*');
+  };
+  useEffect(() => { for (const f of frames) if (f.current?.contentWindow) syncZones(f.current.contentWindow); }, [zones, zoneMode, active, mode]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (zoneFocus) frames[activeRef.current].current?.contentWindow?.postMessage({ type: 'sd:zoneGoto', id: zoneFocus.id }, '*'); }, [zoneFocus]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { if (mode !== 'print') useStudio.setState({ runtime: [] }); setInfo({}); scrollY.current = 0; slideIdx.current = 0; }, [mode]);
 
@@ -153,6 +173,7 @@ export function Preview({ html, mode, pageWidthMm, slideSize, scrollRequest, onS
             sandbox="allow-scripts" style={frameStyle} aria-hidden={i !== active} tabIndex={i === active ? 0 : -1} />
         ))}
         {busy && <div className="busy"><span className="spin" />{mode === 'print' ? 'Pagination…' : 'Rendu…'}</div>}
+        {zoneMode && mode === 'print' && <div className="zone-hint">Tracez un rectangle sur la page à commenter · Échap pour annuler</div>}
         {issues > 0 && (
           <div className="overflow-note" title="Voir la liste des problèmes"><AlertTriangle />{issues} {mode === 'slides' ? 'diapositive(s) trop chargée(s)' : 'débordement(s)'}</div>
         )}

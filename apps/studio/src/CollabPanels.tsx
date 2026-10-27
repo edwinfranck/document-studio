@@ -3,9 +3,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   AtSign, Bell, Check, CheckCheck, ChevronDown, CircleDot, Clock, Eye, FileClock, GitCompare, History, MessageSquare,
-  PenLine, RotateCcw, Send, ShieldCheck, Tag, ThumbsDown, ThumbsUp, UserPlus, X,
+  PenLine, RotateCcw, Save, Send, ShieldCheck, SquareDashedMousePointer, Tag, ThumbsDown, ThumbsUp, UserPlus, X,
 } from 'lucide-react';
-import { lineDiff, settingsDiff, WORKFLOW_LABELS, type DiffLine } from '@studio/engine';
+import { lineDiff, settingsDiff, WORKFLOW_LABELS, type DiffLine, type WorkflowTemplate } from '@studio/engine';
 import { collab, type Comment, type Member, type Me, type Notification, type Role, type VersionInfo, type Workflow } from './api.ts';
 import type { Provider, Peer } from './collabClient.ts';
 import { useStudio } from './store.ts';
@@ -103,17 +103,22 @@ const renderBody = (body: string, members: Member[]) => {
 /* ---------- Commentaires et suggestions ---------- */
 
 export interface Selection { from: number; to: number; text: string; line: number }
+export interface ZoneSel { page: number; rect: { x: number; y: number; w: number; h: number }; line: number; excerpt: string }
 
-export function CommentsPanel({ docId, provider, role, members, comments, reload, getSelection, onJump, activeId, setActiveId }: {
+export function CommentsPanel({ docId, provider, role, members, comments, reload, getSelection, onJump, activeId, setActiveId, zone, clearZone, onStartZone }: {
   docId: string; provider: Provider; role: Role; members: Member[]; comments: Comment[]; reload: () => void;
   getSelection: () => Selection | null; onJump: (c: Comment) => void; activeId: string | null; setActiveId: (id: string | null) => void;
+  /** Zone tracée sur une page imprimée, en attente de commentaire. */
+  zone?: ZoneSel | null; clearZone?: () => void; onStartZone?: () => void;
 }) {
   const me = useStudio(s => s.me);
   const mode = useStudio(s => s.settings.mode);
   const currentSlide = useStudio(s => s.currentSlide);
   const toast = useStudio(s => s.toast);
   const [filter, setFilter] = useState<'open' | 'resolved' | 'suggestions' | 'mine' | 'mentions'>('open');
-  const [draft, setDraft] = useState<{ kind: 'comment' | 'suggestion'; sel: Selection | null; body: string; replacement: string; mentions: string[] } | null>(null);
+  const [draft, setDraft] = useState<{ kind: 'comment' | 'suggestion'; sel: Selection | null; zone?: ZoneSel; body: string; replacement: string; mentions: string[] } | null>(null);
+  useEffect(() => { if (zone) setDraft({ kind: 'comment', sel: null, zone, body: '', replacement: '', mentions: [] }); }, [zone]);
+  const cancel = () => { setDraft(null); clearZone?.(); };
   const myId = me?.id || provider.me?.userId;
 
   const shown = comments.filter(c =>
@@ -132,13 +137,15 @@ export function CommentsPanel({ docId, provider, role, members, comments, reload
   const submit = async () => {
     if (!draft) return;
     const s = draft.sel;
-    const anchor = s ? { ...provider.anchor(s.from, s.to), quote: s.text, line: s.line } : { quote: '', line: 1 };
+    const z = draft.zone;
+    const anchor = z ? { quote: '', line: z.line || 1, page: z.page, rect: z.rect, excerpt: z.excerpt }
+      : s ? { ...provider.anchor(s.from, s.to), quote: s.text, line: s.line } : { quote: '', line: 1 };
     try {
       await collab.addComment(docId, {
         kind: draft.kind, body: draft.body, replacement: draft.kind === 'suggestion' ? draft.replacement : undefined, mentions: draft.mentions,
-        anchor: { ...anchor, slide: mode === 'slides' ? currentSlide + 1 : undefined },
+        anchor: { ...anchor, slide: mode === 'slides' && !z ? currentSlide + 1 : undefined },
       });
-      setDraft(null); reload();
+      cancel(); reload();
     } catch (e: any) { toast(e.message, 'error'); }
   };
 
@@ -148,17 +155,18 @@ export function CommentsPanel({ docId, provider, role, members, comments, reload
         <div className="row panel-actions">
           <button className="btn sm grow" onClick={() => start('comment')}><MessageSquare />Commenter</button>
           <button className="btn sm grow" onClick={() => start('suggestion')} title="Proposer un texte de remplacement sans modifier le document"><PenLine />Suggérer</button>
+          {onStartZone && <button className="btn sm grow" onClick={onStartZone} title="Tracer un rectangle sur une page imprimée et la commenter"><SquareDashedMousePointer />Zone</button>}
         </div>
       )}
       {draft && (
         <div className="thread draft">
-          <div className="thread-quote">{draft.sel ? (draft.sel.text ? `« ${draft.sel.text.slice(0, 160)} »` : `Insertion ligne ${draft.sel.line}`) : `Commentaire général${mode === 'slides' ? ` · diapositive ${currentSlide + 1}` : ''}`}</div>
+          <div className="thread-quote">{draft.zone ? <><span className="badge">Page {draft.zone.page}</span> {draft.zone.excerpt ? `« ${draft.zone.excerpt.slice(0, 120)} »` : 'zone sans texte'}</> : draft.sel ? (draft.sel.text ? `« ${draft.sel.text.slice(0, 160)} »` : `Insertion ligne ${draft.sel.line}`) : `Commentaire général${mode === 'slides' ? ` · diapositive ${currentSlide + 1}` : ''}`}</div>
           {draft.kind === 'suggestion' && (
             <textarea className="input" rows={3} value={draft.replacement} placeholder="Texte proposé (vide = supprimer le passage)" onChange={e => setDraft({ ...draft, replacement: e.target.value })} autoFocus />
           )}
           <MentionBox value={draft.body} onChange={v => setDraft({ ...draft, body: v })} members={members} onMention={u => setDraft(d => d && { ...d, mentions: [...new Set([...d.mentions, u])] })}
             placeholder={draft.kind === 'suggestion' ? 'Pourquoi ce changement ? (facultatif) · @ pour mentionner' : 'Votre commentaire · @ pour mentionner'} onSubmit={submit} autoFocus={draft.kind === 'comment'} />
-          <div className="row"><div className="grow" /><button className="btn sm ghost" onClick={() => setDraft(null)}>Annuler</button><button className="btn sm primary" onClick={submit} disabled={draft.kind === 'comment' && !draft.body.trim()}><Send />Envoyer</button></div>
+          <div className="row"><div className="grow" /><button className="btn sm ghost" onClick={cancel}>Annuler</button><button className="btn sm primary" onClick={submit} disabled={draft.kind === 'comment' && !draft.body.trim()}><Send />Envoyer</button></div>
         </div>
       )}
       <div className="chips">
@@ -194,9 +202,11 @@ function Thread({ c, docId, provider, role, members, reload, active, onFocus }: 
         <strong className="grow">{c.authorName}</strong>
         <span className="faint">{fmtDate(c.at)}</span>
       </div>
-      {(c.anchor.quote || c.anchor.slide) && (
+      {(c.anchor.quote || c.anchor.slide || c.anchor.page) && (
         <div className={'thread-quote' + (stale ? ' stale' : '')}>
-          {c.anchor.slide ? <span className="badge">Diapositive {c.anchor.slide}</span> : null} {c.anchor.quote ? `« ${c.anchor.quote.slice(0, 160)} »` : ''}
+          {c.anchor.slide ? <span className="badge">Diapositive {c.anchor.slide}</span> : null}
+          {c.anchor.page ? <span className="badge" title="Zone d'une page imprimée"><SquareDashedMousePointer />Page {c.anchor.page}</span> : null}
+          {' '}{c.anchor.quote ? `« ${c.anchor.quote.slice(0, 160)} »` : c.anchor.excerpt ? `« ${c.anchor.excerpt.slice(0, 120)} »` : ''}
           {stale && <span className="badge warning" title="Le passage a été modifié ou supprimé depuis.">Passage modifié</span>}
         </div>
       )}
@@ -466,11 +476,26 @@ function ReviewRequest({ docId, workflow, role, members, onClose, onDone }: { do
   const toast = useStudio(s => s.toast);
   const [picked, setPicked] = useState<string[]>(workflow.reviewers.map(r => r.userId));
   const [required, setRequired] = useState(String(workflow.requiredApprovals || Math.max(1, picked.length)));
+  const [templates, setTemplates] = useState<WorkflowTemplate[]>([]);
+  const [tplName, setTplName] = useState<string | null>(null);
+  useEffect(() => { collab.workflowTemplates().then(setTemplates, () => {}); }, []);
   const people = members.filter(m => m.user);
+  const useTemplate = (t: WorkflowTemplate) => {
+    const known = t.reviewers.filter(r => people.some(m => m.userId === r));
+    setPicked(known);
+    setRequired(String(Math.min(t.requiredApprovals, known.length)));
+    if (known.length < t.reviewers.length) toast(`${t.reviewers.length - known.length} relecteur(s) du modèle n'ont pas accès à ce document : invitez-les d'abord.`, 'error');
+  };
+  const saveTemplate = () => collab.saveWorkflowTemplate({ name: tplName || '', reviewers: picked, requiredApprovals: Number(required) })
+    .then(t => { setTemplates(l => [...l.filter(x => x.id !== t.id), t]); setTplName(null); toast(`Modèle « ${t.name} » enregistré.`); }, (e: any) => toast(e.message, 'error'));
   return (
     <Modal title="Demander une relecture" onClose={onClose}
       footer={<><button className="btn" onClick={onClose}>Annuler</button><button className="btn primary" disabled={!picked.length} onClick={() => collab.workflow(docId, { reviewers: picked, state: 'review', ...(canDo.owner(role) ? { requiredApprovals: Number(required) } : {}) }).then(onDone, (e: any) => toast(e.message, 'error'))}><Send />Envoyer la demande</button></>}>
-      <div className="subhead" style={{ marginTop: 0 }}>Relecteurs</div>
+      {templates.length > 0 && <>
+        <div className="subhead" style={{ marginTop: 0 }}>Modèles</div>
+        <div className="chips">{templates.map(t => <button key={t.id} className="chip" onClick={() => useTemplate(t)} title={`${t.reviewers.length} relecteur(s) · ${t.requiredApprovals} validation(s)`}>{t.name}</button>)}</div>
+      </>}
+      <div className="subhead" style={templates.length ? undefined : { marginTop: 0 }}>Relecteurs</div>
       {people.length === 0 && <p className="muted">Invitez d'abord des personnes depuis « Partager ».</p>}
       <div className="col" style={{ gap: 2 }}>
         {people.map(m => <Toggle key={m.userId} checked={picked.includes(m.userId)} onChange={v => setPicked(p => (v ? [...p, m.userId] : p.filter(x => x !== m.userId)))}><span className="row"><Avatar name={m.user!.name} color={m.user!.color} size={22} />{m.user!.name}</span></Toggle>)}
@@ -481,6 +506,12 @@ function ReviewRequest({ docId, workflow, role, members, onClose, onDone }: { do
           <Select value={required} onChange={setRequired} options={['0', '1', '2', '3', '4', '5'].map(n => [n, n === '0' ? 'Aucune (publication libre)' : `${n} validation${n === '1' ? '' : 's'}`] as [string, string])} />
         </>
       )}
+      {picked.length > 0 && (tplName === null
+        ? <button className="btn sm ghost" style={{ marginTop: 10 }} onClick={() => setTplName('')}><Save />Enregistrer ces relecteurs comme modèle</button>
+        : <form className="row" style={{ marginTop: 10 }} onSubmit={e => { e.preventDefault(); saveTemplate(); }}>
+            <input className="input grow" autoFocus placeholder="Nom du modèle (ex. Comité pédagogique)" value={tplName} onChange={e => setTplName(e.target.value)} />
+            <button className="btn sm" type="submit"><Save />Enregistrer</button>
+          </form>)}
     </Modal>
   );
 }

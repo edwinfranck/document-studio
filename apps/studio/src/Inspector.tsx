@@ -1,7 +1,7 @@
 // Panneau de propriétés : réglages du document et de l'élément sélectionné, selon le mode de sortie.
 import { useRef } from 'react';
 import {
-  Blocks, Braces, Columns2, Download, Library, FileText, Image as ImageIcon, LayoutTemplate, Palette, PanelTop, Plus, RotateCcw, Ruler, Save, Type, Upload,
+  Blocks, Braces, Columns2, Download, Library, FileText, Image as ImageIcon, LayoutTemplate, Palette, PanelTop, Plus, RotateCcw, Ruler, Save, Type, Upload, Stamp,
 } from 'lucide-react';
 import {
   COMPONENTS, BY_NAME, FONT_FAMILIES, contrastReport, merge, resolveTheme, type ComponentNode, type DocSettings, type PageSettings,
@@ -15,6 +15,7 @@ interface Props {
   selected: ComponentNode | null;
   onCompare?: () => void;
   blocksNode?: import('react').ReactNode;
+  brandNode?: import('react').ReactNode;
   onInsert(text: string): void;
   onEditComponent(c: ComponentNode, attrs: Record<string, string | true>): void;
   onOpenGallery(): void;
@@ -54,7 +55,7 @@ const setPath = (obj: any, path: string[], value: unknown): any => {
   return { ...(obj || {}), [k]: rest.length ? setPath(obj?.[k], rest, value) : value };
 };
 
-export function Inspector({ selected, onInsert, onEditComponent, onOpenGallery, onExport, onCompare, blocksNode }: Props) {
+export function Inspector({ selected, onInsert, onEditComponent, onOpenGallery, onExport, onCompare, blocksNode, brandNode }: Props) {
   const { settings, setSettings, templates, doc, loadTemplates, toast } = useStudio();
   const resolved = resolveTheme(settings, templates);
   const t = resolved.tokens;
@@ -147,6 +148,12 @@ export function Inspector({ selected, onInsert, onEditComponent, onOpenGallery, 
           <input ref={themeInput} type="file" accept=".json,application/json" hidden onChange={e => { const f = e.target.files?.[0]; if (f) importTemplate(f); e.target.value = ''; }} />
         </div>
       </Section>
+
+      {brandNode && (
+        <Section id="brand" icon={<Stamp />} title="Identité visuelle" hint={settings.brand ? <span className="badge">{settings.brand.name}</span> : undefined}>
+          {brandNode}
+        </Section>
+      )}
 
       <Section id="doc" icon={<FileText />} title="Document">
         {(['title', 'subtitle', 'author', 'organization', 'date', 'version'] as const).map(k => (
@@ -366,11 +373,12 @@ function ComponentEditor({ c, onChange }: { c: ComponentNode; onChange: (a: Reco
 }
 
 function ComponentLibrary({ onInsert, mode }: { onInsert: (t: string) => void; mode: string }) {
-  const cats = ['Contenu', 'Mise en page', 'Présentation', 'Rapport'] as const;
-  const order = mode === 'slides' ? ['Présentation', 'Mise en page', 'Contenu', 'Rapport'] : cats;
+  const cats = ['Contenu', 'Mise en page', 'Présentation', 'Rapport', 'Extensions'] as const;
+  const order = mode === 'slides' ? ['Présentation', 'Mise en page', 'Contenu', 'Rapport', 'Extensions'] : cats;
+  useStudio(st => st.pluginsRev);   // la liste suit les plugins installés
   return (
     <>
-      {order.map(cat => (
+      {order.filter(cat => COMPONENTS.some(c => c.category === cat)).map(cat => (
         <div key={cat}>
           <div className="subhead">{cat}</div>
           {COMPONENTS.filter(c => c.category === cat && !c.parent).map(c => (

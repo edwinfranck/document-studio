@@ -170,6 +170,8 @@ export interface DocSettings {
   customCss: string;
   /** Polices importées : fichier (ressource du document) et nom de famille. */
   fonts?: { family: string; file: string; weight?: string; style?: string }[];
+  /** Identité visuelle appliquée : la version est notée pour proposer les mises à jour, jamais imposées. */
+  brand?: { id: string; version: number; name: string };
 }
 
 export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };

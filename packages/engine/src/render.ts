@@ -6,6 +6,7 @@ import type { Block, ComponentNode, Diagnostic, Heading, RenderEnv, Target } fro
 import { attr, esc, frenchSpacing, highlight, LANGUAGE_LABELS, safeColor, safeHref, safeLength, safeSrc } from './html.ts';
 import { parseAttrs } from './scanner.ts';
 import { textOf } from './parse.ts';
+import { pluginFor, renderPlugin } from './plugins.ts';
 
 export interface Ctx {
   target: Target;
@@ -18,6 +19,7 @@ export interface Ctx {
   math: boolean;            // le document contient des formules
   lineAttrs: boolean;       // data-line pour la synchronisation source/aperçu
   tabsSeq: number;
+  plugins: Set<string>;     // composants de plugins utilisés (leur CSS est ajouté)
 }
 
 export const ICONS: Record<string, string> = {
@@ -40,7 +42,7 @@ const CALLOUT_LABELS: Record<string, string> = { info: 'Information', note: 'Not
 export function newCtx(target: Target, env: RenderEnv, headings: Heading[], lang: string): Ctx {
   return {
     target, env, diags: [], headings, french: /^fr/i.test(lang || 'fr'), footnotes: new Map(), footnoteDefs: new Map(),
-    math: false, lineAttrs: env.context === 'preview', tabsSeq: 0,
+    math: false, lineAttrs: env.context === 'preview', tabsSeq: 0, plugins: new Set(),
   };
 }
 
@@ -246,6 +248,8 @@ export function component(n: ComponentNode, ctx: Ctx): string {
   if (!n.known) {
     return `<div class="sd-unknown"${L}><div class="sd-unknown-label">Composant inconnu : ${esc(n.given)}</div>${n.raw !== undefined ? `<pre>${esc(n.raw)}</pre>` : kids()}</div>`;
   }
+  const plug = pluginFor(n.name);
+  if (plug) { ctx.plugins.add(n.name); return renderPlugin(plug, t, a, plug.content === 'markdown' ? kids() : '', L); }
   switch (n.name) {
     case 'callout': {
       const type = ['info', 'note', 'tip', 'success', 'warning', 'danger'].includes(str(a.type)) ? str(a.type) : 'info';

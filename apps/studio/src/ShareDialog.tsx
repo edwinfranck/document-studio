@@ -1,8 +1,8 @@
 // Partager : personnes et rôles, liens révocables, publications liées à une version, fichiers.
-import { useState } from 'react';
-import { Copy, ExternalLink, FileCode2, FileDown, Files, Globe, Link2, Lock, Presentation, Send, Trash2, UserPlus, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { BarChart3, Copy, ExternalLink, FileCode2, FileDown, Files, Globe, Link2, Lock, Presentation, Send, Trash2, UserPlus, UsersRound, X } from 'lucide-react';
 import { publishBlockers, WORKFLOW_LABELS, type Target } from '@studio/engine';
-import { api, collab, type Doc, type Role } from './api.ts';
+import { api, collab, type Doc, type PubStats, type Publication, type Role, type Space } from './api.ts';
 import { useStudio } from './store.ts';
 import { Avatar, canDo } from './CollabPanels.tsx';
 import { Modal, Segmented, Select, Toggle, fmtDate } from './ui.tsx';
@@ -61,12 +61,14 @@ function People({ doc, role, run }: { doc: Doc; role: Role; run: (p: Promise<Doc
         </form>
       )}
       {owner && <div className="faint" style={{ fontSize: 12 }}>{ROLE_OPTS.map(([k, l]) => `${l} : ${ROLE_HELP[k]}`).join(' · ')}. Une adresse sans compte reçoit l'accès à la création de son compte.</div>}
+      {owner && <SpaceChoice doc={doc} run={run} />}
+      {!owner && doc.space && <div className="faint" style={{ fontSize: 12 }}>Rangé dans l'espace « {doc.space.name} ».</div>}
       <div className="people">
         {(doc.members || []).map(m => (
           <div key={m.userId} className="person">
             <Avatar name={m.user?.name || '?'} color={m.user?.color || '#999'} />
             <div className="grow"><div>{m.user?.name || 'Compte supprimé'}</div><div className="faint">{m.user?.email}</div></div>
-            {m.role === 'owner' || !owner ? <span className="badge">{m.role === 'owner' ? 'Propriétaire' : ROLE_OPTS.find(o => o[0] === m.role)?.[1]}</span> : (
+            {m.viaSpace ? <span className="badge" title="Accès donné par l'espace d'équipe"><UsersRound />{ROLE_OPTS.find(o => o[0] === m.role)?.[1]} · espace</span> : m.role === 'owner' || !owner ? <span className="badge">{m.role === 'owner' ? 'Propriétaire' : ROLE_OPTS.find(o => o[0] === m.role)?.[1]}</span> : (
               <>
                 <div style={{ width: 150 }}><Select value={m.role} onChange={v => run(collab.setMember(doc.id, m.userId, v))} options={ROLE_OPTS} /></div>
                 <button className="btn ghost icon danger" onClick={() => run(collab.removeMember(doc.id, m.userId), 'Accès retiré.')} aria-label={`Retirer ${m.user?.name}`}><X /></button>
@@ -83,6 +85,25 @@ function People({ doc, role, run }: { doc: Doc; role: Role; run: (p: Promise<Doc
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function SpaceChoice({ doc, run }: { doc: Doc; run: (p: Promise<Doc>, m?: string) => void }) {
+  const [spaces, setSpaces] = useState<Space[] | null>(null);
+  useEffect(() => { collab.spaces().then(setSpaces, () => setSpaces([])); }, []);
+  if (!spaces?.length && !doc.space) return null;
+  const sid = doc.space?.id || '';
+  const role = doc.space?.role || 'editor';
+  return (
+    <div className="link-form">
+      <div className="row wrap">
+        <UsersRound size={16} className="faint" />
+        <span className="grow">Espace d'équipe</span>
+        <div style={{ width: 190 }}><Select value={sid} onChange={v => run(collab.docSpace(doc.id, v || null, role), v ? 'Document rangé dans l\'espace.' : 'Document retiré de l\'espace.')} options={[['', 'Aucun'], ...(spaces || []).map(x => [x.id, x.name] as [string, string]), ...(doc.space && !(spaces || []).some(x => x.id === sid) ? [[sid, doc.space.name] as [string, string]] : [])]} /></div>
+        {sid && <div style={{ width: 160 }}><Select value={role} onChange={v => run(collab.docSpace(doc.id, sid, v))} options={ROLE_OPTS} /></div>}
+      </div>
+      {sid && <div className="faint" style={{ fontSize: 12 }}>Les membres de l'espace sont {ROLE_OPTS.find(o => o[0] === role)?.[1].toLowerCase()}s ; ses administrateurs sont éditeurs.</div>}
     </div>
   );
 }
@@ -137,6 +158,7 @@ function Publish({ doc, role }: { doc: Doc; role: Role }) {
   const [vis, setVis] = useState<'public' | 'members'>('public');
   const [label, setLabel] = useState('');
   const [busy, setBusy] = useState(false);
+  const [stats, setStats] = useState<Publication | null>(null);
   const refresh = () => api.get(doc.id).then(d => useStudio.setState(s => ({ doc: s.doc && { ...s.doc, ...d, markdown: s.doc.markdown, settings: s.doc.settings } })));
   const w = doc.workflow!;
   const blockers = official ? publishBlockers(w as any, doc.version || 0) : [];
@@ -167,15 +189,44 @@ function Publish({ doc, role }: { doc: Doc; role: Role }) {
             <span className="link-icon">{p.visibility === 'public' ? <Globe /> : <Lock />}</span>
             <div className="grow">
               <div>v{p.version}{p.label ? ` · ${p.label}` : ''} {p.official ? <span className="badge ok">officielle</span> : <span className="badge">brouillon</span>} {p.stale && <span className="badge warning" title="Le document a changé depuis : republiez pour mettre à jour.">obsolète</span>}</div>
-              <div className="faint">{fmtDate(p.at)} · {p.visibility === 'public' ? 'lien public' : 'membres seulement'}</div>
+              <div className="faint">{fmtDate(p.at)} · {p.visibility === 'public' ? 'lien public' : 'membres seulement'} · {p.views ? `${p.views} consultation${p.views > 1 ? 's' : ''}` : 'pas encore consultée'}</div>
             </div>
             <a className="btn sm" href={base + p.id} target="_blank" rel="noreferrer"><ExternalLink />Lecture</a>
             <a className="btn sm ghost hide-sm" href={base + p.id + '/slides'} target="_blank" rel="noreferrer">Diapos</a>
             <a className="btn sm ghost hide-sm" href={base + p.id + '/pdf'} target="_blank" rel="noreferrer">PDF</a>
+            <button className="btn sm ghost icon" onClick={() => setStats(p)} aria-label="Consultations" title="Consultations"><BarChart3 /></button>
             {canDo.owner(role) && <button className="btn sm ghost danger" onClick={() => collab.unpublish(doc.id, p.id).then(refresh, (e: any) => toast(e.message, 'error'))} aria-label="Retirer la publication"><Trash2 /></button>}
           </div>
         ))}
       </div>
+      {stats && <StatsDialog docId={doc.id} pub={stats} onClose={() => setStats(null)} />}
     </div>
+  );
+}
+
+/** Consultations d'une publication : total, formats, 30 derniers jours. Aucune donnée personnelle. */
+function StatsDialog({ docId, pub, onClose }: { docId: string; pub: Publication; onClose: () => void }) {
+  const toast = useStudio(st => st.toast);
+  const [s, setS] = useState<PubStats | null>(null);
+  useEffect(() => { collab.pubStats(docId, pub.id).then(setS, (e: any) => toast(e.message, 'error')); }, [docId, pub.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const days = Array.from({ length: 30 }, (_, i) => new Date(Date.now() - (29 - i) * 86400e3).toISOString().slice(0, 10));
+  const max = Math.max(1, ...days.map(d => s?.days[d]?.views || 0));
+  const visitors = days.reduce((n, d) => n + (s?.days[d]?.visitors || 0), 0);
+  return (
+    <Modal title={`Consultations · v${pub.version}${pub.label ? ` · ${pub.label}` : ''}`} onClose={onClose}>
+      {!s ? <div className="empty-small"><span className="spin" /></div> : (
+        <div className="col" style={{ gap: 14 }}>
+          <div className="stat-row">
+            <div><strong>{s.total}</strong><span>consultations</span></div>
+            <div><strong>{visitors}</strong><span>visiteurs sur 30 jours</span></div>
+            {(['reading', 'slides', 'print', 'pdf'] as const).map(f => <div key={f}><strong>{s.formats[f] || 0}</strong><span>{{ reading: 'lecture', slides: 'diaporama', print: 'impression', pdf: 'PDF' }[f]}</span></div>)}
+          </div>
+          <div className="bars" role="img" aria-label="Consultations par jour sur 30 jours">
+            {days.map(d => <span key={d} title={`${new Date(d).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })} : ${s.days[d]?.views || 0}`} style={{ height: `${((s.days[d]?.views || 0) / max) * 100}%` }} />)}
+          </div>
+          <p className="faint" style={{ margin: 0, fontSize: 12 }}>Aucune adresse IP ni aucun identifiant n'est conservé : un visiteur est reconnu le temps d'une journée par une empreinte dont la clé change chaque jour.{s.last ? ` Dernière consultation ${fmtDate(s.last)}.` : ''}</p>
+        </div>
+      )}
+    </Modal>
   );
 }

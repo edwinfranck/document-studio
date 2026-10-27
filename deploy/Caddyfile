@@ -1,0 +1,5 @@
+# HTTPS automatique (Let's Encrypt) ; Caddy relaie aussi les connexions WebSocket de /collab.
+{$STUDIO_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy studio:4317
+}

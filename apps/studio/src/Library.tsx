@@ -1,8 +1,9 @@
 // Bibliothèque : documents, collections, import (bouton, glisser-déposer ou coller), création.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, Users, LogOut, ClipboardPaste, Clock, Copy, FilePlus2, FileText, Folder, FolderInput, Layers, Pencil, Presentation, Printer, Search, Sparkles, Trash2, Upload } from 'lucide-react';
+import { BookOpen, Users, LogOut, ClipboardPaste, Clock, Copy, FilePlus2, FileText, Folder, FolderInput, Layers, Pencil, Presentation, Printer, Search, Settings, Sparkles, Trash2, Upload, UsersRound } from 'lucide-react';
 import { parse } from '@studio/engine';
-import { api, collab, type DocSummary } from './api.ts';
+import { api, collab, type DocSummary, type Space } from './api.ts';
+import { SettingsDialog, type SettingsTab } from './Settings.tsx';
 import { Avatar, NotificationsBell } from './CollabPanels.tsx';
 import { Menu } from './ui.tsx';
 import { useStudio } from './store.ts';
@@ -19,6 +20,9 @@ export function Library({ onOpen }: { onOpen: (id: string) => void }) {
   const [q, setQ] = useState('');
   const [drag, setDrag] = useState(false);
   const [pasting, setPasting] = useState<string | null>(null);
+  const [settings, setSettings] = useState<SettingsTab | null>(null);
+  const [spaces, setSpaces] = useState<Space[]>([]);
+  useEffect(() => { if (api.backend.collab && me) collab.spaces().then(setSpaces, () => {}); }, [me, settings]);
   const input = useRef<HTMLInputElement>(null);
 
   const load = () => api.list().then(d => { setDocs(d); setError(''); }, e => setError(e.message));
@@ -40,15 +44,16 @@ export function Library({ onOpen }: { onOpen: (id: string) => void }) {
     return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0], 'fr'));
   }, [docs]);
   const currentProject = filter.startsWith('p:') ? filter.slice(2) : '';
+  const currentSpace = filter.startsWith('s:') ? spaces.find(x => x.id === filter.slice(2)) : undefined;
 
   const shown = useMemo(() => {
     const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
     const nq = norm(q.trim());
     const week = Date.now() - 7 * 86400e3;
     return (docs || []).filter(d =>
-      (filter === 'all' || (filter === 'recent' && new Date(d.updatedAt).getTime() > week) || (filter === 'shared' && (d as any).role !== 'owner') || (currentProject && d.project === currentProject)) &&
+      (filter === 'all' || (filter === 'recent' && new Date(d.updatedAt).getTime() > week) || (filter === 'shared' && d.role !== 'owner') || (currentProject && d.project === currentProject) || (currentSpace && d.space === currentSpace.id)) &&
       (!nq || norm(d.name + ' ' + d.project).includes(nq)));
-  }, [docs, filter, q, currentProject]);
+  }, [docs, filter, q, currentProject, currentSpace]);
 
   async function importFiles(files: File[]) {
     const mds = files.filter(f => /\.(md|markdown|mdx|txt)$/i.test(f.name));
@@ -64,6 +69,7 @@ export function Library({ onOpen }: { onOpen: (id: string) => void }) {
         const side = settingsFiles.find(s => s.name.replace(/\.studio\.json$/i, '') === base);
         const settings = side ? (JSON.parse(await side.text()).settings || {}) : {};
         const doc = await api.create({ name: ir.meta.title ? String(ir.meta.title) : base, project: currentProject, markdown: text, settings, importedFrom: f.name });
+        if (currentSpace) await collab.docSpace(doc.id, currentSpace.id, 'editor').catch(() => {});
         // Médias : tous pour un import unique ; sinon, ceux que le document référence.
         const refs = new Set(ir.assets.map(a => a.split('/').pop()));
         for (const m of media) if (mds.length === 1 || refs.has(m.name)) await api.putAsset(doc.id, m.name, m);
@@ -76,7 +82,12 @@ export function Library({ onOpen }: { onOpen: (id: string) => void }) {
   }
 
   const create = async (markdown?: string, name?: string, settings?: any) => {
-    try { const d = await api.create({ name: name || 'Sans titre', project: currentProject, markdown, settings }); onOpen(d.id); }
+    try {
+      const d = await api.create({ name: name || 'Sans titre', project: currentProject, markdown, settings });
+      // créé depuis un espace : il y est rangé, modifiable par ses membres
+      if (currentSpace) await collab.docSpace(d.id, currentSpace.id, 'editor').catch(() => {});
+      onOpen(d.id);
+    }
     catch (e: any) { toast(e.message, 'error'); }
   };
   /** Crée un document à partir d'un texte collé ; le titre vient du front matter ou du premier titre. */
@@ -119,11 +130,13 @@ export function Library({ onOpen }: { onOpen: (id: string) => void }) {
         <div className="grow" />
         <span className="faint hide-sm" style={{ fontSize: 12 }}>{api.backend.kind === 'browser' ? 'Édition web · documents enregistrés dans ce navigateur · ' : ''}Glissez des fichiers .md n'importe où pour les importer</span>
         <a className="btn ghost sm hide-sm" href="https://github.com/edwinfranck/document-studio" target="_blank" rel="noopener noreferrer">GitHub</a>
+        <button className="btn ghost icon" onClick={() => setSettings(api.backend.collab ? 'notifications' : 'plugins')} title="Paramètres" aria-label="Paramètres"><Settings /></button>
         <NotificationsBell />
         {me && (
           <Menu trigger={t => <button className="btn ghost icon" onClick={t} aria-label="Compte"><Avatar name={me.name} color={me.color} size={26} /></button>}>
             {close => <>
               <div className="menu-title">{me.name} · {me.email}</div>
+              <button onClick={() => { close(); setSettings('notifications'); }}><Settings /><span>Paramètres<span className="sub">Notifications, espaces, identités, plugins</span></span></button>
               <button onClick={() => { close(); collab.logout().then(() => location.reload()); }}><LogOut /><span>Se déconnecter</span></button>
             </>}
           </Menu>
@@ -134,13 +147,18 @@ export function Library({ onOpen }: { onOpen: (id: string) => void }) {
           <button aria-pressed={filter === 'all'} onClick={() => setFilter('all')}><Layers />Tous les documents<span className="n">{docs?.length ?? ''}</span></button>
           <button aria-pressed={filter === 'recent'} onClick={() => setFilter('recent')}><Clock />Cette semaine</button>
           {api.backend.collab && <button aria-pressed={filter === 'shared'} onClick={() => setFilter('shared')}><Users />Partagés avec moi<span className="n">{docs?.filter(d => (d as any).role && (d as any).role !== 'owner').length || ''}</span></button>}
+          {api.backend.collab && <>
+            <div className="subhead row"><span className="grow">Espaces</span><button className="btn ghost icon sm" onClick={() => setSettings('spaces')} title="Gérer les espaces" aria-label="Gérer les espaces"><Settings size={13} /></button></div>
+            {spaces.length === 0 && <div className="faint" style={{ padding: '0 10px', fontSize: 12 }}>Aucun. <a href="#/" onClick={e => { e.preventDefault(); setSettings('spaces'); }}>Créer un espace d'équipe</a></div>}
+            {spaces.map(sp => <button key={sp.id} aria-pressed={filter === 's:' + sp.id} onClick={() => setFilter('s:' + sp.id)}><UsersRound />{sp.name}<span className="n">{docs?.filter(d => d.space === sp.id).length || ''}</span></button>)}
+          </>}
           <div className="subhead">Collections</div>
           {projects.length === 0 && <div className="faint" style={{ padding: '0 10px', fontSize: 12 }}>Aucune. Rangez un document via « Déplacer ».</div>}
           {projects.map(([p, n]) => <button key={p} aria-pressed={filter === 'p:' + p} onClick={() => setFilter('p:' + p)}><Folder />{p}<span className="n">{n}</span></button>)}
         </nav>
         <main className="lib-main">
           <div className="lib-toolbar">
-            <h1>{filter === 'all' ? 'Documents' : filter === 'recent' ? 'Cette semaine' : filter === 'shared' ? 'Partagés avec moi' : currentProject}</h1>
+            <h1>{filter === 'all' ? 'Documents' : filter === 'recent' ? 'Cette semaine' : filter === 'shared' ? 'Partagés avec moi' : currentSpace ? currentSpace.name : currentProject}</h1>
             <div className="search"><Search /><input className="input" placeholder="Rechercher" value={q} onChange={e => setQ(e.target.value)} aria-label="Rechercher un document" /></div>
             <div className="grow" />
             <button className="btn" onClick={openPaste} title="Créer un document à partir de Markdown collé (ou Ctrl+V sur cette page)"><ClipboardPaste />Coller</button>
@@ -211,6 +229,7 @@ export function Library({ onOpen }: { onOpen: (id: string) => void }) {
           <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>Le titre vient du front matter ou du premier titre « # ». Ctrl+Entrée pour créer.</div>
         </Modal>
       )}
+      {settings && <SettingsDialog initial={settings} onClose={() => setSettings(null)} />}
       {drag && <div className="dropzone">Déposez vos fichiers .md (et leurs images) pour les importer</div>}
     </div>
   );

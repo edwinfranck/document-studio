@@ -1,0 +1,9 @@
+**/node_modules
+apps/studio/dist
+apps/desktop/out
+.vercel
+.git
+.env
+*.log
+apps/desktop/dist
+apps/desktop/runtime

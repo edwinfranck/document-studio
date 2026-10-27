@@ -1,7 +1,7 @@
 // Édition web : documents, ressources, gabarits et historique dans IndexedDB.
 // Les exports se font dans la page avec le même moteur ; le PDF passe par la boîte d'impression.
 import { zipSync, strToU8 } from 'fflate';
-import { BUILTIN_TEMPLATES, FONT_MANIFEST, fontFaceCss, render, resolveTheme, slugify, type DocSettings, type RenderEnv, type Target, type Template } from '@studio/engine';
+import { BUILTIN_TEMPLATES, FONT_MANIFEST, fontFaceCss, installedPlugins, registerPlugins, render, resolveTheme, slugify, type DocSettings, type RenderEnv, type Target, type Template } from '@studio/engine';
 import type { Asset, Backend, Doc, DocSummary, ExportRequest } from './api.ts';
 import { findAsset } from './env.ts';
 
@@ -10,6 +10,8 @@ interface AssetRecord { key: string; doc: string; name: string; blob: Blob }
 interface SnapRecord { key: string; doc: string; at: string; markdown: string }
 
 const HISTORY_EVERY_MS = 2 * 60_000;
+const PLUGINS_KEY = 'ds-plugins';
+const storedPlugins = (): unknown[] => { try { const v = JSON.parse(localStorage.getItem(PLUGINS_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } };
 const HISTORY_KEEP = 60;
 
 /* ---------- IndexedDB minimal ---------- */
@@ -209,6 +211,22 @@ export function browserBackend(): Backend {
       return clean;
     },
     deleteTheme: id => del('themes', id),
+    // Plugins de l'édition web : gardés dans ce navigateur, vérifiés par le moteur avant installation.
+    plugins: async () => installedPlugins(),
+    async installPlugin(p) {
+      const id = String((p as any)?.id || '');
+      const next = [...storedPlugins().filter((x: any) => x?.id !== id), p];
+      const r = registerPlugins(next);
+      const err = r.errors.find(e => e.id === (id || '?'));
+      if (err) { registerPlugins(storedPlugins()); throw new Error(`Plugin refusé : ${err.problems.join(' ')}`); }
+      try { localStorage.setItem(PLUGINS_KEY, JSON.stringify(next)); } catch { /* stockage plein ou bloqué */ }
+      return r.installed;
+    },
+    async removePlugin(id) {
+      const next = storedPlugins().filter((x: any) => x?.id !== id);
+      try { localStorage.setItem(PLUGINS_KEY, JSON.stringify(next)); } catch { /* stockage bloqué */ }
+      return registerPlugins(next).installed;
+    },
     async exportFile(id, b: ExportRequest) {
       const doc = await loadDoc(id);
       const settings = b.settings ?? doc.settings;

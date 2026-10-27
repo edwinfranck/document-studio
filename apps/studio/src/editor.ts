@@ -14,7 +14,7 @@ import type { Awareness } from 'y-protocols/awareness';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import { lintGutter, setDiagnostics, type Diagnostic as CmDiagnostic } from '@codemirror/lint';
 import { tags as t } from '@lezer/highlight';
-import { BY_NAME, COMPONENTS, type Diagnostic } from '@studio/engine';
+import { BY_NAME, COMPONENTS, suggestionHunks, type Diagnostic } from '@studio/engine';
 
 const style = HighlightStyle.define([
   { tag: t.heading1, fontWeight: '700', fontSize: '1.12em' },
@@ -116,7 +116,7 @@ export interface EditorHooks {
 
 export interface CollabBinding { text: Y.Text; awareness: Awareness; undo: Y.UndoManager }
 
-export function createEditor(parent: HTMLElement, doc: string, hooks: EditorHooks, opts: { collab?: CollabBinding; readOnly?: boolean } = {}): EditorView {
+export function createEditor(parent: HTMLElement, doc: string, hooks: EditorHooks, opts: { collab?: CollabBinding; readOnly?: boolean; extra?: Extension } = {}): EditorView {
   let depth = 0;
   let cursorTimer: ReturnType<typeof setTimeout>;
   const c = opts.collab;
@@ -127,6 +127,7 @@ export function createEditor(parent: HTMLElement, doc: string, hooks: EditorHook
     c ? [yCollab(c.text, c.awareness, { undoManager: c.undo }), keymap.of(yUndoManagerKeymap)] : history(),
     EditorState.readOnly.of(!!opts.readOnly), EditorView.editable.of(!opts.readOnly),
     commentField,
+    opts.extra || [],
     indentOnInput(), bracketMatching(), closeBrackets(), highlightSelectionMatches(),
     markdown({ base: markdownLanguage, codeLanguages: languages }),
     syntaxHighlighting(style), directiveLines, lintGutter(),
@@ -255,3 +256,47 @@ const commentField = StateField.define<DecorationSet>({
   },
   provide: f => EditorView.decorations.from(f),
 });
+
+/* ---------- Mode suggestion : modifications suivies ---------- */
+
+class DeletedWidget extends WidgetType {
+  constructor(readonly text: string) { super(); }
+  eq(o: DeletedWidget) { return o.text === this.text; }
+  toDOM() {
+    const s = document.createElement('span');
+    s.className = 'cm-track-del';
+    s.textContent = this.text;
+    return s;
+  }
+  ignoreEvent() { return false; }
+}
+
+/** Affiche, par rapport au texte de départ, ce qui est ajouté (souligné) et supprimé (barré). */
+export function trackChanges(base: string, onCount: (n: number) => void): Extension {
+  const build = (text: string) => {
+    const hunks = suggestionHunks(base, text);
+    onCount(hunks.length);
+    const b = new RangeSetBuilder<Decoration>();
+    let delta = 0;
+    for (const h of hunks) {
+      const at = h.from + delta;
+      if (h.to > h.from) b.add(at, at, Decoration.widget({ widget: new DeletedWidget(base.slice(h.from, h.to)), side: -1 }));
+      if (h.insert) b.add(at, at + h.insert.length, Decoration.mark({ class: 'cm-track-ins' }));
+      delta += h.insert.length - (h.to - h.from);
+    }
+    return b.finish();
+  };
+  let timer: ReturnType<typeof setTimeout>;
+  return ViewPlugin.fromClass(class {
+    decorations: DecorationSet;
+    constructor(view: EditorView) { this.decorations = build(view.state.doc.toString()); }
+    update(u: ViewUpdate) {
+      if (!u.docChanged) return;
+      this.decorations = this.decorations.map(u.changes);
+      clearTimeout(timer);
+      // le calcul des différences attend une courte pause dans la frappe
+      timer = setTimeout(() => { this.decorations = build(u.view.state.doc.toString()); u.view.dispatch({}); }, 250);
+    }
+    destroy() { clearTimeout(timer); }
+  }, { decorations: v => v.decorations });
+}

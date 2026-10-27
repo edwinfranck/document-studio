@@ -12,7 +12,9 @@
     "test:update-snapshots": "STUDIO_UPDATE_SNAPSHOTS=1 pnpm --filter @studio/server test",
     "studio": "node apps/server/bin/studio.mjs",
     "docs": "tsx scripts/gen-docs.mts",
-    "build:web": "pnpm fonts && pnpm --filter @studio/app build"
+    "build:web": "pnpm fonts && pnpm --filter @studio/app build",
+    "desktop": "pnpm build && pnpm --filter @studio/desktop start",
+    "desktop:dist": "pnpm build && pnpm --filter @studio/desktop dist"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",
@@ -21,6 +23,7 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": [
+      "electron",
       "esbuild"
     ]
   },
