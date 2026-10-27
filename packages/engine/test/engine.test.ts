@@ -156,6 +156,14 @@ describe('séparation contenu / présentation', () => {
   });
 });
 
+describe('ancres des titres', () => {
+  it('un titre qui commence par un chiffre donne un identifiant CSS valide', () => {
+    const ir = parse('# Rapport\n\n## 1. Contexte et objectifs\n\n### 2.1. Transformation\n\n## 2026 en chiffres');
+    for (const h of ir.headings) expect(h.id).toMatch(/^[a-z]/);
+    expect(ir.headings[0].id).toBe('s-1-contexte-et-objectifs');
+  });
+});
+
 describe('les trois sorties', () => {
   const files = readdirSync(FIX).filter(f => f.endsWith('.md'));
   for (const f of files) for (const mode of ['reading', 'print', 'slides'] as Target[]) {

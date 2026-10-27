@@ -86,6 +86,13 @@ describe.skipIf(!hasChrome)('exports réels', () => {
     }
   }, 60_000);
 
+  it('pagine un document aux titres numérotés à la main (« 1. Contexte »)', async () => {
+    const md = '# Compte rendu de réunion\n\n## 1. Contexte et objectifs de la rencontre\n\nTexte.\n\n## 2. Présentation des activités\n\n### 2.1. Transformation des workflows\n\nTexte.\n\n## 3. Suite\n\nTexte.\n';
+    const r = await E.exportPdf({ markdown: md, settings: { templateId: 'corporate' }, dir: FIX, name: 'cr' }, 'print');
+    expect(r.pdf.subarray(0, 5).toString()).toBe('%PDF-');
+    expect(r.info.pages).toBeGreaterThan(1);
+  }, 60_000);
+
   it('répète l\'en-tête d\'un tableau coupé sur plusieurs pages', async () => {
     const r = await E.exportPdf(input('03-tableaux-larges.md'), 'print');
     if (!hasPdftotext) return;

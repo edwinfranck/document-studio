@@ -173,7 +173,10 @@ export function parse(source: string, opts: ParseOptions = {}): DocumentIR {
       if (n.type === 'heading') {
         const h = n as MdHeading;
         const text = textOf(h).trim();
+        // Un identifiant ne commence jamais par un chiffre : « #1-contexte » est un sélecteur CSS invalide
+        // (Paged.js s'en sert pour les numéros de page du sommaire, et la pagination échouerait).
         let id = slugify(text);
+        if (/^\d/.test(id)) id = 's-' + id;
         const k = used.get(id) || 0;
         used.set(id, k + 1);
         if (k) id = `${id}-${k + 1}`;
