@@ -24,7 +24,7 @@ export const MIME: Record<string, string> = {
 };
 
 const cache = new Map<string, string>();
-const dataUri = (file: string) => {
+export const dataUri = (file: string) => {
   let v = cache.get(file);
   if (!v) { v = `data:${MIME[extname(file).toLowerCase()] || 'application/octet-stream'};base64,${readFileSync(file).toString('base64')}`; cache.set(file, v); }
   return v;

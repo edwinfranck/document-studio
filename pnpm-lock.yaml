@@ -172,6 +172,9 @@ importers:
       diff:
         specifier: ^9.0.0
         version: 9.0.0
+      fflate:
+        specifier: ^0.8.3
+        version: 0.8.3
       highlight.js:
         specifier: ^11.10.0
         version: 11.12.0

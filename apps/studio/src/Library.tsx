@@ -1,8 +1,9 @@
 // Bibliothèque : documents, collections, import (bouton, glisser-déposer ou coller), création.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, Users, LogOut, ClipboardPaste, Clock, Copy, FilePlus2, FileText, Folder, FolderInput, Layers, Pencil, Presentation, Printer, Search, Settings, Sparkles, Trash2, Upload, UsersRound } from 'lucide-react';
+import { BookOpen, Users, LogOut, ClipboardPaste, Clock, Copy, FileArchive, FilePlus2, FileText, Folder, FolderInput, FolderTree, Layers, Pencil, Presentation, Printer, Search, Settings, Sparkles, Trash2, Upload, UsersRound } from 'lucide-react';
 import { parse } from '@studio/engine';
-import { api, collab, type DocSummary, type Space } from './api.ts';
+import { api, collab, type DocSummary, type ImportResult, type SiteSummary, type Space } from './api.ts';
+import { ImportWizard } from './ImportWizard.tsx';
 import { SettingsDialog, type SettingsTab } from './Settings.tsx';
 import { Avatar, NotificationsBell } from './CollabPanels.tsx';
 import { Menu } from './ui.tsx';
@@ -12,7 +13,7 @@ import { EXAMPLES } from './examples.ts';
 
 const MODE_ICON = { reading: BookOpen, print: Printer, slides: Presentation } as const;
 
-export function Library({ onOpen }: { onOpen: (id: string) => void }) {
+export function Library({ onOpen, onOpenSite }: { onOpen: (id: string) => void; onOpenSite: (id: string) => void }) {
   const { templates, toast, me } = useStudio();
   const [docs, setDocs] = useState<DocSummary[] | null>(null);
   const [error, setError] = useState('');
@@ -22,6 +23,17 @@ export function Library({ onOpen }: { onOpen: (id: string) => void }) {
   const [pasting, setPasting] = useState<string | null>(null);
   const [settings, setSettings] = useState<SettingsTab | null>(null);
   const [spaces, setSpaces] = useState<Space[]>([]);
+  const [sites, setSites] = useState<SiteSummary[]>([]);
+  const [zip, setZip] = useState<File | null>(null);
+  const zipInput = useRef<HTMLInputElement>(null);
+  const loadSites = () => { if (api.backend.collab && me) collab.sites().then(setSites, () => {}); };
+  useEffect(loadSites, [me]); // eslint-disable-line react-hooks/exhaustive-deps
+  const imported = (r: ImportResult) => {
+    setZip(null);
+    if (r.kind === 'site') onOpenSite(r.id);
+    else if (r.kind === 'doc') onOpen(r.id);
+    else { load(); setFilter('p:' + r.project); toast(`${r.ids.length} documents importés dans « ${r.project} ».`); }
+  };
   useEffect(() => { if (api.backend.collab && me) collab.spaces().then(setSpaces, () => {}); }, [me, settings]);
   const input = useRef<HTMLInputElement>(null);
 
@@ -56,6 +68,8 @@ export function Library({ onOpen }: { onOpen: (id: string) => void }) {
   }, [docs, filter, q, currentProject, currentSpace]);
 
   async function importFiles(files: File[]) {
+    const z = files.find(f => /\.zip$/i.test(f.name) || f.type === 'application/zip');
+    if (z) { setZip(z); return; }
     const mds = files.filter(f => /\.(md|markdown|mdx|txt)$/i.test(f.name));
     const media = files.filter(f => /^(image|video)\//.test(f.type) || /\.(woff2?|ttf|otf)$/i.test(f.name));
     const settingsFiles = files.filter(f => /\.studio\.json$/i.test(f.name));
@@ -146,6 +160,7 @@ export function Library({ onOpen }: { onOpen: (id: string) => void }) {
         <nav className="lib-side" aria-label="Collections">
           <button aria-pressed={filter === 'all'} onClick={() => setFilter('all')}><Layers />Tous les documents<span className="n">{docs?.length ?? ''}</span></button>
           <button aria-pressed={filter === 'recent'} onClick={() => setFilter('recent')}><Clock />Cette semaine</button>
+          {sites.length > 0 && <button aria-pressed={filter === 'sites'} onClick={() => setFilter('sites')}><FolderTree />Projets<span className="n">{sites.length}</span></button>}
           {api.backend.collab && <button aria-pressed={filter === 'shared'} onClick={() => setFilter('shared')}><Users />Partagés avec moi<span className="n">{docs?.filter(d => (d as any).role && (d as any).role !== 'owner').length || ''}</span></button>}
           {api.backend.collab && <>
             <div className="subhead row"><span className="grow">Espaces</span><button className="btn ghost icon sm" onClick={() => setSettings('spaces')} title="Gérer les espaces" aria-label="Gérer les espaces"><Settings size={13} /></button></div>
@@ -158,31 +173,44 @@ export function Library({ onOpen }: { onOpen: (id: string) => void }) {
         </nav>
         <main className="lib-main">
           <div className="lib-toolbar">
-            <h1>{filter === 'all' ? 'Documents' : filter === 'recent' ? 'Cette semaine' : filter === 'shared' ? 'Partagés avec moi' : currentSpace ? currentSpace.name : currentProject}</h1>
+            <h1>{filter === 'sites' ? 'Projets' : filter === 'all' ? 'Documents' : filter === 'recent' ? 'Cette semaine' : filter === 'shared' ? 'Partagés avec moi' : currentSpace ? currentSpace.name : currentProject}</h1>
             <div className="search"><Search /><input className="input" placeholder="Rechercher" value={q} onChange={e => setQ(e.target.value)} aria-label="Rechercher un document" /></div>
             <div className="grow" />
             <button className="btn" onClick={openPaste} title="Créer un document à partir de Markdown collé (ou Ctrl+V sur cette page)"><ClipboardPaste />Coller</button>
             <button className="btn" onClick={() => input.current?.click()}><Upload />Importer</button>
-            <input ref={input} type="file" multiple hidden accept=".md,.markdown,.mdx,.txt,.json,image/*,video/mp4,video/webm" onChange={e => { importFiles([...(e.target.files || [])]); e.target.value = ''; }} />
+            <button className="btn" onClick={() => zipInput.current?.click()} title="Archive de fichiers Markdown : documentation multi-pages, document continu ou documents séparés"><FileArchive />Projet ZIP</button>
+            <input ref={zipInput} type="file" hidden accept=".zip,application/zip" onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) setZip(f); }} />
+            <input ref={input} type="file" multiple hidden accept=".md,.markdown,.mdx,.txt,.json,.zip,image/*,video/mp4,video/webm" onChange={e => { importFiles([...(e.target.files || [])]); e.target.value = ''; }} />
             <button className="btn primary" onClick={() => create()}><FilePlus2 />Nouveau</button>
           </div>
           <div className="lib-list">
+            {(filter === 'all' || filter === 'sites') && sites.length > 0 && (
+              <div className="site-cards">
+                {sites.filter(x => !q || x.name.toLowerCase().includes(q.toLowerCase())).map(x => (
+                  <button key={x.id} className="site-card" onClick={() => onOpenSite(x.id)}>
+                    <span className="site-card-icon"><FolderTree /></span>
+                    <span className="grow"><strong>{x.name}</strong><span className="faint">{x.pages} page{x.pages > 1 ? 's' : ''} · {fmtDate(x.updatedAt)}{x.role !== 'owner' ? ` · ${({ viewer: 'lecture', commenter: 'commentaire', editor: 'édition' } as Record<string, string>)[x.role]}` : ''}</span></span>
+                  </button>
+                ))}
+              </div>
+            )}
             {error && <div className="empty"><h2>Serveur injoignable</h2><p>{error}</p><button className="btn" onClick={load}>Réessayer</button></div>}
             {!error && docs === null && <div className="empty"><span className="spin" /></div>}
-            {!error && docs && docs.length === 0 && (
+            {!error && docs && docs.length === 0 && !sites.length && (
               <div className="empty">
                 <FileText className="big" />
                 <h2>Aucun document</h2>
                 <p>Importez un fichier Markdown, collez-en le contenu (Ctrl+V), ou partez d'un exemple.</p>
                 <div className="starter">
                   <button onClick={() => input.current?.click()}><Upload /><strong>Importer un .md</strong><span>Le fichier d'origine reste intact.</span></button>
+                  <button onClick={() => zipInput.current?.click()}><FileArchive /><strong>Importer un projet ZIP</strong><span>Plusieurs fichiers Markdown et leurs images.</span></button>
                   <button onClick={openPaste}><ClipboardPaste /><strong>Coller du Markdown</strong><span>Ou Ctrl+V directement sur cette page.</span></button>
                   <button onClick={() => create(EXAMPLES.guide, 'Guide StudioMD', { templateId: 'technique' })}><Sparkles /><strong>Guide StudioMD</strong><span>Tous les composants, en un document.</span></button>
                   <button onClick={() => create(EXAMPLES.deck, 'Présentation exemple', { mode: 'slides', templateId: 'cinema' })}><Presentation /><strong>Présentation</strong><span>Un diaporama prêt à adapter.</span></button>
                 </div>
               </div>
             )}
-            {!error && docs && docs.length > 0 && (
+            {!error && docs && docs.length > 0 && filter !== 'sites' && (
               <>
                 <table className="doc-table">
                   <thead><tr><th>Nom</th><th className="hide-sm">Collection</th><th className="hide-sm">Gabarit</th><th>Modifié</th><th className="hide-sm" style={{ textAlign: 'right' }}>Mots</th><th /></tr></thead>
@@ -230,7 +258,8 @@ export function Library({ onOpen }: { onOpen: (id: string) => void }) {
         </Modal>
       )}
       {settings && <SettingsDialog initial={settings} onClose={() => setSettings(null)} />}
-      {drag && <div className="dropzone">Déposez vos fichiers .md (et leurs images) pour les importer</div>}
+      {zip && <ImportWizard file={zip} onClose={() => setZip(null)} onDone={r => { imported(r); loadSites(); }} />}
+      {drag && <div className="dropzone">Déposez vos fichiers .md (et leurs images) ou une archive .zip pour les importer</div>}
     </div>
   );
 }

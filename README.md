@@ -16,10 +16,11 @@ Des fichiers Markdown vers des documents soignés : **page de lecture HTML**, **
 | Versions, validation, publication, consultations | oui | oui | historique local seulement |
 | Notifications par e-mail | oui (SMTP) | oui (SMTP) | non |
 | Identités visuelles, plugins | oui | oui | plugins seulement |
+| Import d'un projet ZIP | trois modes | trois modes | document continu ou documents séparés |
 | PDF | Chrome ou Chromium, téléchargé directement | Chromium d'Electron, rien à installer | boîte d'impression du navigateur |
 | HTML, diaporama, paquet ZIP | oui | oui | oui, générés dans la page |
 
-La collaboration est décrite dans [docs/collaboration.md](docs/collaboration.md), l'hébergement pour une équipe dans [docs/hebergement.md](docs/hebergement.md), les plugins dans [docs/plugins.md](docs/plugins.md).
+Les projets ZIP et la documentation multi-pages sont décrits dans [docs/projets.md](docs/projets.md). La collaboration est décrite dans [docs/collaboration.md](docs/collaboration.md), l'hébergement pour une équipe dans [docs/hebergement.md](docs/hebergement.md), les plugins dans [docs/plugins.md](docs/plugins.md).
 
 L'interface détecte seule le serveur local ; sans lui, elle bascule sur le stockage du navigateur. Aucun document ne quitte l'appareil dans l'édition web.
 
@@ -83,6 +84,7 @@ Coller ou glisser une image dans la source l'ajoute au document et l'insère. An
 | I. Identités visuelles versionnées (logos, couleurs, polices, couverture, pieds de page), mises à jour proposées | fait, testé |
 | J. Plugins de composants déclaratifs, nettoyés et échappés | fait, testé |
 | K. Mode suggestion (suivi des modifications en tapant), commentaires sur une zone de page, modèles de validation, consultations des publications | fait, testé |
+| L. Import de projets ZIP (analyse, trois modes), documentation multi-pages (navigation, recherche, apparence commune, réglages par page), site HTML, PDF unique ou par page, publication | fait, testé |
 | Édition web hébergée (stockage navigateur, sans collaboration) | fait |
 | Application de bureau (Electron, PDF sans Chrome), image Docker, déploiement HTTPS | fait, vérifiés |
 
@@ -100,7 +102,7 @@ vercel --prod             # la configuration est dans vercel.json
 ## Tests
 
 ```sh
-pnpm test                     # moteur (79) + serveur (66) : collaboration et équipes de bout en bout, exports PDF réels, non-régression visuelle
+pnpm test                     # moteur (91) + serveur (77) : collaboration, équipes et projets ZIP de bout en bout, exports PDF réels, non-régression visuelle
 pnpm test:update-snapshots    # après un changement voulu d'un gabarit
 pnpm typecheck
 ```
@@ -122,6 +124,7 @@ Corpus dans `tests/fixtures/` : document simple, rapport long, tableaux larges, 
 | `docs/collaboration.md` | rôles, espaces, temps réel, versions, commentaires, suggestions, identités, notifications, validation, publication |
 | `docs/hebergement.md` | Docker, HTTPS, variables, e-mails, sauvegarde |
 | `docs/plugins.md` | format des plugins de composants |
+| `docs/projets.md` | import d'archives ZIP, documentation multi-pages, exports du projet |
 
 ## Licence
 

@@ -188,4 +188,25 @@ export interface RenderEnv {
   context: 'preview' | 'export';
   /** CSS de KaTeX (polices comprises) pour les formules. */
   katexCss?: string;
+  /** Liens d'un projet multi-pages : nouvelle adresse, null = page introuvable, undefined = lien ordinaire. */
+  resolveLink?: (href: string) => string | null | undefined;
+}
+
+/* ---------- Projet multi-pages ---------- */
+
+export interface SearchDoc { id: string; title: string; path: string; headings: { id: string; text: string }[]; text: string }
+export interface SiteNavItem { title: string; id?: string; folder?: string; children: SiteNavItem[] }
+/** Ce qui entoure une page de projet : navigation, fil d'Ariane, pages voisines, recherche. */
+export interface SiteContext {
+  name: string;
+  logo?: string;
+  nav: SiteNavItem[];
+  current: string;
+  href: (pageId: string) => string;
+  home?: string;
+  prev?: { id: string; title: string };
+  next?: { id: string; title: string };
+  crumbs: { title: string; id?: string }[];
+  /** Index de recherche : embarqué (aperçu, page seule) ou fichier partagé par toutes les pages (site exporté). */
+  search?: { inline?: SearchDoc[]; src?: string };
 }

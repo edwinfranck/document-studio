@@ -6,7 +6,7 @@ import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as Y from 'yjs';
 import {
-  applyBrand, can, DEFAULT_WORKFLOW, installedPlugins, notifCategory, publishBlockers, registerPlugins, ROLE_LABELS, ROLES, threeWayMerge, WORKFLOW_LABELS,
+  applyBrand, can, DEFAULT_WORKFLOW, merge, safeArchivePath, searchDoc, slugify, installedPlugins, notifCategory, publishBlockers, registerPlugins, ROLE_LABELS, ROLES, threeWayMerge, WORKFLOW_LABELS,
   type Action, type DocSettings, type Role, type Target, type WorkflowState,
 } from '@studio/engine';
 import { FONTS_DIR, KATEX_DIR, MIME, PAGEDJS_FILE } from '@studio/engine/node';
@@ -14,8 +14,11 @@ import * as S from './store.ts';
 import * as A from './auth.ts';
 import * as C from './collab.ts';
 import { exportPdf, exportZip, renderHtml, type ExportInput } from './export.ts';
+import { zipSync } from 'fflate';
 import { findChrome } from './browser.ts';
 import { mailEnabled, publicUrl, sendMail } from './mailer.ts';
+import * as W from './sites.ts';
+import * as K from './keys.ts';
 
 const UI_DIST = resolve(fileURLToPath(import.meta.url), '../../../studio/dist');
 const MAX_BODY = 60 * 1024 * 1024;
@@ -67,7 +70,8 @@ type Handler = (c: Ctx) => Promise<void> | void;
 const routes: { method: string; re: RegExp; keys: string[]; fn: Handler }[] = [];
 const route = (method: string, path: string, fn: Handler) => {
   const keys: string[] = [];
-  const re = new RegExp('^' + path.replace(/:(\w+)/g, (_, k) => (keys.push(k), '([^/]+)')) + '$');
+  // « :chemin+ » accepte des barres obliques (fichiers d'un projet : « images/schema.png »)
+  const re = new RegExp('^' + path.replace(/:(\w+)(\+)?/g, (_, k, many) => (keys.push(k), many ? '(.+)' : '([^/]+)')) + '$');
   routes.push({ method, re, keys, fn });
 };
 
@@ -82,12 +86,12 @@ const send = (res: ServerResponse, body: Buffer | string, type: string, filename
   res.end(body);
 };
 
-async function body(req: IncomingMessage): Promise<Buffer> {
+async function body(req: IncomingMessage, max = MAX_BODY): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let n = 0;
   for await (const c of req) {
     n += c.length;
-    if (n > MAX_BODY) throw new S.HttpError(413, 'Fichier trop volumineux (60 Mo au plus).');
+    if (n > max) throw new S.HttpError(413, `Fichier trop volumineux (${Math.round(max / 1048576)} Mo au plus).`);
     chunks.push(c);
   }
   return Buffer.concat(chunks);
@@ -145,7 +149,16 @@ const blockResolver = (actor: string) => (bid: string) => { const b = S.getBlock
 
 function exportInput(id: string, actor: string, over: { settings?: Partial<DocSettings>; markdown?: string } = {}): ExportInput {
   const d = current(id);
-  return { markdown: over.markdown ?? d.markdown, settings: over.settings ?? d.settings, dir: S.docDir(id), name: S.readMeta(id).name, themes: S.listThemes(), blocks: blockResolver(actor) };
+  const meta = S.readMeta(id);
+  const input: ExportInput = { markdown: over.markdown ?? d.markdown, settings: over.settings ?? d.settings, dir: S.docDir(id), name: meta.name, themes: S.listThemes(), blocks: blockResolver(actor) };
+  // Page d'un projet : réglages communs du projet, images et liens résolus dans le projet.
+  if (meta.site && W.siteExists(meta.site)) {
+    const site = W.readSite(meta.site);
+    const page = site.pages.find(p => p.id === id);
+    input.settings = W.pageSettings(site, input.settings);
+    if (page) input.env = W.embedEnv(site, page);
+  }
+  return input;
 }
 
 /** Membres d'un document. Les adresses e-mail ne sont montrées qu'au propriétaire (fenêtre de partage). */
@@ -165,6 +178,8 @@ function notifyMembers(id: string, actor: string, text: string, type: string, on
   for (const u of new Set(ids)) S.notify(u, { type, docId: id, text, actor, link: `#/doc/${id}` });
 }
 
+const subjectOf = (c: Ctx) => (c.user ? { user: c.user.id } : { share: c.share || '' });
+
 function publicDoc(c: Ctx, id: string, role: Role) {
   const d = S.getDoc(id);
   const cur = current(id);
@@ -178,6 +193,8 @@ function publicDoc(c: Ctx, id: string, role: Role) {
     publications: (m.publications || []).map(p => ({ ...p, views: S.pubStats(p.id).total, stale: !!latest && p.version < latest.n && S.readVersion(id, p.version).markdown !== cur.markdown })),
     space: m.space ? { id: m.space, name: S.getSpace(m.space)?.name || 'Espace supprimé', role: m.spaceRole || 'editor' } : undefined,
     branchOf: m.branchOf ? { docId: m.branchOf.docId, baseVersion: m.branchOf.baseVersion, name: m.branchOf.name } : undefined,
+    site: m.site && W.siteExists(m.site) ? { ...sitePublic(m.site, m.sitePath), assetKey: K.mintKey(`site:${m.site}`, subjectOf(c)) } : undefined,
+    assetKey: K.mintKey(`doc:${id}`, subjectOf(c)),
     presence: C.presence(id),
   };
 }
@@ -240,6 +257,13 @@ const secure = (req: IncomingMessage) => req.headers['x-forwarded-proto'] === 'h
 /* ---------- Liens de partage ---------- */
 
 route('GET', '/api/share/:token', c => {
+  const sf = W.findSiteLink(c.p.token);
+  if (sf) {
+    const ok = !sf.link.revoked && (!sf.link.expiresAt || new Date(sf.link.expiresAt).getTime() > Date.now());
+    if (!ok) throw new S.HttpError(404, 'Ce lien n\'existe pas, a expiré ou a été révoqué.');
+    if (sf.link.requireLogin && !c.user) throw new S.HttpError(401, 'Ce lien demande de se connecter.');
+    return json(c.res, { siteId: sf.siteId, role: sf.link.role, name: sf.name, requireLogin: !!sf.link.requireLogin });
+  }
   const f = S.findLink(c.p.token);
   const valid = f && !f.link.revoked && (!f.link.expiresAt || new Date(f.link.expiresAt).getTime() > Date.now());
   if (!f || !valid) { S.audit('share-invalid', { ip: c.req.socket.remoteAddress }); throw new S.HttpError(404, 'Ce lien n\'existe pas, a expiré ou a été révoqué.'); }
@@ -598,6 +622,8 @@ function servePublication(c: Ctx, kind: string) {
   if (!/^[0-9a-f]{16}$/.test(c.p.pid)) throw new S.HttpError(404, 'Publication introuvable.');
   const dir = join(S.PUBS, c.p.pid);
   const pm = existsSync(join(dir, 'meta.json')) ? JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8')) : null;
+  if (pm?.siteId) return serveSitePublication(c, pm, dir, kind);
+  if (!['reading', 'slides', 'print', 'pdf'].includes(kind)) throw new S.HttpError(404, 'Format indisponible.');
   const ref = pm && S.docExists(pm.docId) ? S.readMeta(pm.docId).publications?.find(p => p.id === c.p.pid) : null;
   if (!pm || !ref || ref.revoked) throw new S.HttpError(404, 'Cette publication n\'existe pas ou a été retirée.');
   if (ref.visibility === 'members' && !S.accessOf(S.readMeta(pm.docId), c.user?.id || null).role) throw new S.HttpError(c.user ? 403 : 401, 'Publication réservée aux membres du document : connectez-vous.');
@@ -616,6 +642,8 @@ route('GET', '/p/:pid', c => servePublication(c, 'reading'));
 route('GET', '/p/:pid/slides', c => servePublication(c, 'slides'));
 route('GET', '/p/:pid/print', c => servePublication(c, 'print'));
 route('GET', '/p/:pid/pdf', c => servePublication(c, 'pdf'));
+route('GET', '/p/:pid/', c => servePublication(c, 'reading'));
+route('GET', '/p/:pid/:file+', c => servePublication(c, c.p.file));
 
 /* ---------- Branches ---------- */
 
@@ -877,6 +905,250 @@ route('GET', '/api/workflow-templates', c => json(c.res, S.listWorkflowTemplates
 route('POST', '/api/workflow-templates', async c => { const u = needUser(c); json(c.res, S.saveWorkflowTemplate(await bodyJson(c.req), u.id, id => !!A.userById(id)), 201); });
 route('DELETE', '/api/workflow-templates/:tid', c => { S.deleteWorkflowTemplate(c.p.tid, needUser(c).id); json(c.res, { ok: true }); });
 
+/* ---------- Import d'archives ZIP ---------- */
+
+route('POST', '/api/imports', async c => {
+  const u = needUser(c);
+  const name = String(c.url.searchParams.get('name') || 'archive.zip').slice(0, 160);
+  const zip = await body(c.req, W.importLimits().maxTotalBytes);
+  try { json(c.res, W.startImport(u.id, name, new Uint8Array(zip)), 201); }
+  catch (e: any) { if (e instanceof S.HttpError) throw e; throw new S.HttpError(400, e.message); }
+});
+route('POST', '/api/imports/:iid/commit', async c => {
+  const u = needUser(c);
+  const r = W.commitImport(c.p.iid, u.id, await bodyJson(c.req));
+  S.audit('import', { user: u.id, kind: r.kind });
+  json(c.res, r, 201);
+});
+route('DELETE', '/api/imports/:iid', c => { W.cancelImport(c.p.iid, needUser(c).id); json(c.res, { ok: true }); });
+
+/* ---------- Projets multi-pages ---------- */
+
+function siteGuard(c: Ctx, action: Action) {
+  const m = W.readSite(c.p.sid);
+  const a = W.siteAccessOf(m, c.user?.id || null, c.share);
+  if (!can(a.role, action) || (action === 'download' && a.via === 'link' && a.link && !a.link.allowDownload)) {
+    S.audit('denied', { site: m.id, action, user: c.user?.id || null, ip: c.req.socket.remoteAddress });
+    if (!a.role) throw new S.HttpError(c.user ? 403 : 401, c.user ? 'Vous n\'avez pas accès à ce projet.' : 'Connectez-vous pour accéder à ce projet.');
+    throw new S.HttpError(403, `Action réservée : votre rôle (${ROLE_LABELS[a.role]}) ne le permet pas.`);
+  }
+  const actor = c.user?.id || `guest:${(c.share || '').slice(0, 8)}`;
+  return { m, role: a.role!, actor, actorName: c.user?.name || 'Invité' };
+}
+function sitePublic(sid: string, path?: string) {
+  const m = W.readSite(sid);
+  return { id: m.id, name: m.name, settings: m.settings, pages: m.pages, entry: m.entry, logo: m.logo, path, files: W.siteFiles(sid).map(f => f.path) };
+}
+function siteOut(c: Ctx, sid: string, role: Role) {
+  const m = W.readSite(sid);
+  const share = can(role, 'share');
+  return {
+    ...sitePublic(sid), assetKey: K.mintKey(`site:${sid}`, subjectOf(c)), description: m.description, role, owner: m.owner, createdAt: m.createdAt, updatedAt: m.updatedAt, source: m.source,
+    files: W.siteFiles(sid), space: m.space ? { id: m.space, name: S.getSpace(m.space)?.name || 'Espace supprimé', role: m.spaceRole || 'editor' } : undefined,
+    members: members(m as unknown as S.DocMetaFile, share), links: share ? m.links : undefined, invites: share ? m.invites : undefined,
+    publications: (m.publications || []).map(p => ({ ...p, views: S.pubStats(p.id).total })),
+  };
+}
+const pageMarkdown = (id: string) => current(id).markdown;
+
+route('GET', '/api/sites', c => json(c.res, W.listSites(needUser(c).id)));
+route('GET', '/api/sites/:sid', c => { const g = siteGuard(c, 'read'); json(c.res, siteOut(c, g.m.id, g.role)); });
+route('PATCH', '/api/sites/:sid', async c => {
+  const g = siteGuard(c, 'edit');
+  const b = await bodyJson(c.req);
+  const m = W.patchSite(g.m.id, m => {
+    if (typeof b.name === 'string' && b.name.trim()) m.name = b.name.trim().slice(0, 120);
+    if (typeof b.description === 'string') m.description = b.description.slice(0, 400) || undefined;
+    if (b.settings && typeof b.settings === 'object') m.settings = b.settings;
+    if ('logo' in b) m.logo = b.logo && W.siteFiles(m.id).some(f => f.path === b.logo) ? b.logo : undefined;
+    if (b.entry && m.pages.some(p => p.id === b.entry)) m.entry = b.entry;
+    if (Array.isArray(b.pages)) {
+      // nouvel ordre et nouveaux titres : seules des pages existantes, chacune une fois
+      const next = b.pages.map((x: any) => { const p = m.pages.find(y => y.id === x.id); return p && { ...p, title: String(x.title || p.title).slice(0, 160) }; }).filter(Boolean);
+      if (next.length === m.pages.length && new Set(next.map((p: any) => p.id)).size === next.length) m.pages = next;
+      else throw new S.HttpError(400, 'Organisation invalide : chaque page doit apparaître une fois.');
+    }
+  });
+  W.logSite(m.id, g.actor, 'settings', b.settings ? 'a modifié l\'apparence du projet' : Array.isArray(b.pages) ? 'a réorganisé les pages' : 'a modifié le projet');
+  for (const p of m.pages) C.broadcast(p.id, { type: 'site' });
+  json(c.res, siteOut(c, m.id, g.role));
+});
+route('DELETE', '/api/sites/:sid', c => { const g = siteGuard(c, 'delete'); for (const p of g.m.pages) C.closeRoom(p.id); W.deleteSite(g.m.id); S.audit('site-delete', { site: g.m.id, user: g.actor }); json(c.res, { ok: true }); });
+route('GET', '/api/sites/:sid/files/:path+', c => {
+  siteGuard(c, 'read');
+  const f = W.siteFilePath(c.p.sid, c.p.path);
+  serveFile(c.res, f, true);
+});
+route('PUT', '/api/sites/:sid/files/:path+', async c => {
+  const g = siteGuard(c, 'edit');
+  W.putSiteFile(g.m.id, c.p.path, await body(c.req));
+  W.logSite(g.m.id, g.actor, 'file', `a ajouté le fichier ${c.p.path}`);
+  json(c.res, { files: W.siteFiles(g.m.id) }, 201);
+});
+route('GET', '/api/sites/:sid/search', c => { const g = siteGuard(c, 'read'); json(c.res, g.m.pages.map(p => searchDoc(p.id, p.path, p.title, pageMarkdown(p.id)))); });
+route('GET', '/api/sites/:sid/activity', c => { const g = siteGuard(c, 'read'); json(c.res, W.siteActivity(g.m.id, u => A.userById(u)?.name || 'Invité')); });
+route('POST', '/api/sites/:sid/pages', async c => {
+  const g = siteGuard(c, 'edit');
+  const u = needUser(c);
+  const b = await bodyJson(c.req);
+  const title = String(b.title || '').trim().slice(0, 160) || 'Nouvelle page';
+  const folder = String(b.folder || '').replace(/^\/+|\/+$/g, '');
+  let path = `${folder ? folder + '/' : ''}${slugify(title) || 'page'}.md`;
+  for (let k = 2; g.m.pages.some(p => p.path === path); k++) path = `${folder ? folder + '/' : ''}${slugify(title)}-${k}.md`;
+  const doc = S.createDoc({ name: title, markdown: `# ${title}\n\n` }, g.m.owner || u.id);
+  S.patchMeta(doc.id, m => { m.site = g.m.id; m.sitePath = path; });
+  const m = W.patchSite(g.m.id, m => { const at = m.pages.findIndex(p => p.id === b.after); m.pages.splice(at < 0 ? m.pages.length : at + 1, 0, { id: doc.id, path, title }); });
+  W.logSite(m.id, g.actor, 'page-added', `a ajouté la page « ${title} »`, doc.id);
+  json(c.res, { site: siteOut(c, m.id, g.role), page: doc.id }, 201);
+});
+route('DELETE', '/api/sites/:sid/pages/:pid', c => {
+  const g = siteGuard(c, 'share');
+  const page = g.m.pages.find(p => p.id === c.p.pid);
+  if (!page) throw new S.HttpError(404, 'Page introuvable dans ce projet.');
+  if (g.m.pages.length === 1) throw new S.HttpError(400, 'Un projet garde au moins une page.');
+  C.closeRoom(page.id);
+  S.deleteDoc(page.id);
+  const m = W.patchSite(g.m.id, m => { m.pages = m.pages.filter(p => p.id !== page.id); if (m.entry === page.id) m.entry = m.pages[0].id; });
+  W.logSite(m.id, g.actor, 'page-removed', `a supprimé la page « ${page.title} »`);
+  json(c.res, siteOut(c, m.id, g.role));
+});
+route('POST', '/api/sites/:sid/members', async c => {
+  const g = siteGuard(c, 'share');
+  const b = await bodyJson(c.req);
+  const role = b.role as Role;
+  if (!['viewer', 'commenter', 'editor'].includes(role)) throw new S.HttpError(400, 'Rôle invalide.');
+  const email = String(b.email || '').trim().toLowerCase();
+  const u = A.userByEmail(email);
+  if (u) {
+    W.patchSite(g.m.id, m => { m.members = [...(m.members || []).filter(x => x.userId !== u.id), { userId: u.id, role, addedAt: new Date().toISOString(), addedBy: g.actor }]; });
+    S.notify(u.id, { type: 'invite', text: `${g.actorName} vous a invité sur le projet « ${g.m.name} » (${ROLE_LABELS[role]})`, actor: g.actor, link: `#/site/${g.m.id}` });
+  } else {
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new S.HttpError(400, 'Adresse e-mail invalide.');
+    W.patchSite(g.m.id, m => { m.invites = [...(m.invites || []).filter(i => i.email !== email), { email, role, at: new Date().toISOString(), by: g.actor }]; });
+    void sendMail({ to: email, subject: `${g.actorName} vous invite sur « ${g.m.name} »`, text: `${g.actorName} vous invite à rejoindre le projet documentaire « ${g.m.name} » sur Document Studio (${ROLE_LABELS[role].toLowerCase()}).\n\nCréez votre compte avec cette adresse : l'accès vous sera donné automatiquement.`, link: publicUrl('/'), linkLabel: 'Créer mon compte' });
+  }
+  W.logSite(g.m.id, g.actor, 'invited', `a invité ${u?.name || email} (${ROLE_LABELS[role]})`);
+  S.audit('site-member-add', { site: g.m.id, by: g.actor, email, role });
+  for (const p of g.m.pages) C.refreshAccess(p.id);
+  json(c.res, siteOut(c, g.m.id, g.role), 201);
+});
+route('DELETE', '/api/sites/:sid/members/:uid', c => {
+  const g = siteGuard(c, 'share');
+  const key = decodeURIComponent(c.p.uid);
+  W.patchSite(g.m.id, m => { m.members = (m.members || []).filter(x => x.userId !== key); m.invites = (m.invites || []).filter(i => i.email !== key); });
+  S.audit('site-member-remove', { site: g.m.id, by: g.actor, user: key });
+  for (const p of g.m.pages) C.refreshAccess(p.id);
+  json(c.res, siteOut(c, g.m.id, g.role));
+});
+route('POST', '/api/sites/:sid/links', async c => {
+  const g = siteGuard(c, 'share');
+  const b = await bodyJson(c.req);
+  if (!['viewer', 'commenter', 'editor'].includes(b.role)) throw new S.HttpError(400, 'Rôle invalide.');
+  const link: S.ShareLink = { id: S.rid(4), token: S.rid(18), role: b.role, expiresAt: b.expiresAt ? new Date(b.expiresAt).toISOString() : undefined, requireLogin: !!b.requireLogin, allowDownload: b.allowDownload !== false, createdAt: new Date().toISOString(), createdBy: g.actor };
+  W.patchSite(g.m.id, m => { m.links = [...(m.links || []), link]; });
+  W.logSite(g.m.id, g.actor, 'link', `a créé un lien ${ROLE_LABELS[link.role].toLowerCase()}`);
+  S.audit('site-link-create', { site: g.m.id, by: g.actor, link: link.id });
+  json(c.res, siteOut(c, g.m.id, g.role), 201);
+});
+route('PATCH', '/api/sites/:sid/links/:lid', async c => {
+  const g = siteGuard(c, 'share');
+  const b = await bodyJson(c.req);
+  W.patchSite(g.m.id, m => { const l = m.links?.find(x => x.id === c.p.lid); if (!l) throw new S.HttpError(404, 'Lien introuvable.'); if (b.revoked === true) l.revoked = true; });
+  S.audit('site-link-revoke', { site: g.m.id, by: g.actor, link: c.p.lid });
+  for (const p of g.m.pages) C.refreshAccess(p.id);
+  json(c.res, siteOut(c, g.m.id, g.role));
+});
+route('PUT', '/api/sites/:sid/space', async c => {
+  const g = siteGuard(c, 'share');
+  const b = await bodyJson(c.req);
+  const space = S.checkSpaceMember(b.space || null, needUser(c).id);
+  const role = ['viewer', 'commenter', 'editor'].includes(b.role) ? b.role : 'editor';
+  W.patchSite(g.m.id, m => { m.space = space; m.spaceRole = space ? role : undefined; });
+  for (const p of g.m.pages) C.refreshAccess(p.id);
+  json(c.res, siteOut(c, g.m.id, g.role));
+});
+
+route('POST', '/api/sites/:sid/export', async c => {
+  const g = siteGuard(c, 'download');
+  const b = await bodyJson(c.req);
+  const m = g.m;
+  const settingsOf = (id: string) => W.pageSettings(m, current(id).settings);
+  const slug = slugify(m.name).slice(0, 60) || 'projet';
+  if (b.format === 'site') {
+    const files = W.buildStaticSite(m, pageMarkdown, settingsOf, S.listThemes());
+    const z = zipSync(Object.fromEntries(Object.entries(files).map(([k, v]) => [`${slug}/${k}`, v])), { level: 6 });
+    return send(c.res, Buffer.from(z), 'application/zip', `${slug} - site.zip`);
+  }
+  if (b.format === 'pdf') {
+    const d = W.mergedDocument(m, pageMarkdown);
+    const settings = merge(m.settings as any, { mode: 'print', page: { breakBeforeH1: true }, overrides: { layout: { cover: b.cover === false ? 'none' : (m.settings.overrides?.layout?.cover || 'band'), toc: b.toc !== false } } } as any) as Partial<DocSettings>;
+    const r = await exportPdf({ markdown: d.markdown, settings, dir: W.siteDir(m.id), name: m.name, themes: S.listThemes(), env: d.env }, 'print');
+    c.res.setHeader('x-studio-info', encodeURIComponent(JSON.stringify(r.info)));
+    return send(c.res, r.pdf, 'application/pdf', `${m.name}.pdf`);
+  }
+  if (b.format === 'pdf-pages') {
+    const out: Record<string, Uint8Array> = {};
+    for (const [i, p] of m.pages.entries()) {
+      const r = await exportPdf({ markdown: pageMarkdown(p.id), settings: { ...settingsOf(p.id), mode: 'print' }, dir: W.siteDir(m.id), name: p.title, themes: S.listThemes(), env: W.embedEnv(m, p) }, 'print');
+      out[`${slug}/${String(i + 1).padStart(2, '0')}-${slugify(p.title).slice(0, 50) || 'page'}.pdf`] = r.pdf;
+    }
+    return send(c.res, Buffer.from(zipSync(out, { level: 0 })), 'application/zip', `${slug} - PDF par page.zip`);
+  }
+  throw new S.HttpError(400, 'Format inconnu.');
+});
+route('GET', '/api/sites/:sid/original', c => {
+  const g = siteGuard(c, 'download');
+  const f = join(W.siteDir(g.m.id), 'original.zip');
+  if (!existsSync(f)) throw new S.HttpError(404, 'Ce projet n\'a pas été importé d\'une archive.');
+  send(c.res, readFileSync(f), 'application/zip', g.m.source?.zip || `${g.m.name}.zip`);
+});
+route('POST', '/api/sites/:sid/publish', async c => {
+  const g = siteGuard(c, 'publish');
+  const b = await bodyJson(c.req);
+  const m = g.m;
+  const pid = S.rid(8);
+  const dir = join(S.PUBS, pid, 'site');
+  // une version de chaque page est enregistrée : la publication est liée à un état connu
+  const versions: Record<string, number> = {};
+  for (const p of m.pages) { const v = C.liveRoom(p.id)?.checkpoint('explicit', true) || S.latestVersion(p.id); versions[p.id] = v?.n || 0; }
+  const files = W.buildStaticSite(m, pageMarkdown, id => W.pageSettings(m, current(id).settings), S.listThemes());
+  for (const [k, v] of Object.entries(files)) { const f = join(dir, ...k.split('/')); mkdirSync(join(f, '..'), { recursive: true }); writeFileSync(f, v); }
+  const entry = (m.pages.find(p => p.id === m.entry) || m.pages[0]).path.replace(/\.(md|markdown|mdown|mkd)$/i, '.html');
+  const ref: S.PublicationRef = { id: pid, version: 0, at: new Date().toISOString(), by: g.actor, visibility: b.visibility === 'members' ? 'members' : 'public', label: String(b.label || '').slice(0, 80) || undefined, official: true };
+  writeFileSync(join(S.PUBS, pid, 'meta.json'), JSON.stringify({ ...ref, siteId: m.id, name: m.name, entry, versions }, null, 2));
+  W.patchSite(m.id, x => { x.publications = [...(x.publications || []), ref]; });
+  W.logSite(m.id, g.actor, 'published', `a publié le projet (${m.pages.length} pages, ${ref.visibility === 'public' ? 'lien public' : 'membres seulement'})`);
+  json(c.res, { ...ref, url: `/p/${pid}/` }, 201);
+});
+route('POST', '/api/sites/:sid/publications/:pid/revoke', c => {
+  const g = siteGuard(c, 'publish');
+  W.patchSite(g.m.id, m => { const p = m.publications?.find(x => x.id === c.p.pid); if (!p) throw new S.HttpError(404, 'Publication introuvable.'); p.revoked = true; });
+  W.logSite(g.m.id, g.actor, 'unpublished', 'a retiré une publication');
+  json(c.res, { ok: true });
+});
+
+/** Site publié : /p/<id>/ ouvre la page d'accueil, /p/<id>/<chemin> sert les pages et les fichiers. */
+function serveSitePublication(c: Ctx, pm: any, dir: string, file: string) {
+  if (!W.siteExists(pm.siteId)) throw new S.HttpError(404, 'Cette publication n\'existe plus.');
+  const site = W.readSite(pm.siteId);
+  const ref = site.publications?.find(p => p.id === c.p.pid);
+  if (!ref || ref.revoked) throw new S.HttpError(404, 'Cette publication n\'existe pas ou a été retirée.');
+  if (ref.visibility === 'members' && !W.siteAccessOf(site, c.user?.id || null).role) throw new S.HttpError(c.user ? 403 : 401, 'Publication réservée aux membres du projet : connectez-vous.');
+  if (c.url.pathname === `/p/${c.p.pid}`) { c.res.writeHead(302, { location: `/p/${c.p.pid}/` }); return void c.res.end(); }
+  const rel = file === 'reading' || file === '' ? pm.entry : file;
+  const safe = safeArchivePath(rel);
+  if (!safe) throw new S.HttpError(404, 'Fichier introuvable.');
+  const f = join(dir, 'site', ...safe.split('/'));
+  if (!existsSync(f) || !statSync(f).isFile()) throw new S.HttpError(404, 'Page introuvable dans cette publication.');
+  if (/\.html$/.test(f)) S.recordView(c.p.pid, 'site', `${c.req.headers['x-forwarded-for'] || c.req.socket.remoteAddress}|${c.req.headers['user-agent'] || ''}`);
+  c.res.writeHead(200, {
+    'content-type': MIME[extname(f).toLowerCase()] || ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css' } as Record<string, string>)[extname(f)] || 'application/octet-stream',
+    'cache-control': 'no-cache', 'x-content-type-options': 'nosniff',
+    'content-security-policy': "default-src 'none'; img-src 'self' data: https:; font-src 'self' data:; style-src 'unsafe-inline'; script-src 'self' 'unsafe-inline'; media-src 'self' data: https:; frame-ancestors 'self'",
+  });
+  createReadStream(f).pipe(c.res);
+}
+
 /* Ressources du moteur pour l'aperçu */
 route('GET', '/fonts/:file', c => serveFile(c.res, inside(FONTS_DIR, c.p.file), true, true));
 route('GET', '/vendor/paged.js', c => serveFile(c.res, PAGEDJS_FILE, true));
@@ -899,8 +1171,16 @@ export function createApp() {
         const m = r.re.exec(url.pathname);
         if (!m) continue;
         const p = Object.fromEntries(r.keys.map((k, i) => [k, decodeURIComponent(m[i + 1])]));
-        const share = (req.headers['x-share-token'] as string) || url.searchParams.get('share');
-        await r.fn({ req, res, p, url, user: A.currentUser(req), share });
+        let share = (req.headers['x-share-token'] as string) || url.searchParams.get('share');
+        let user = A.currentUser(req);
+        // Images de l'aperçu (iframe isolée, sans cookie) : clé signée limitée à ce document ou ce projet.
+        const k = req.method === 'GET' && !user && !share ? url.searchParams.get('k') : null;
+        if (k) {
+          const key = K.readKey(k);
+          const target = /^\/api\/docs\/([^/]+)\/assets\//.exec(url.pathname)?.[1] ? `doc:${p.id}` : /^\/api\/sites\/([^/]+)\/files\//.test(url.pathname) ? `site:${p.sid}` : '';
+          if (key && target && key.scope === target) { user = key.user ? A.userById(key.user) || null : null; share = key.share || null; }
+        }
+        await r.fn({ req, res, p, url, user, share });
         return;
       }
       if (url.pathname.startsWith('/api/')) return json(res, { error: 'Route inconnue.' }, 404);

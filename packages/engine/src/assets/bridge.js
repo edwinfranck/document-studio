@@ -49,6 +49,7 @@
       }
     }
     if (m.type === 'sd:restore') scroller().scrollTop = m.y || 0;
+    if (m.type === 'sd:hash') { var h = d.getElementById(m.id); if (h) h.scrollIntoView({ block: 'start' }); }
     if (m.type === 'sd:goto' && window.SD) window.SD.go(m.index);
     if (m.type === 'sd:zoom') { d.body.style.zoom = m.value; }
     if (m.type === 'sd:zoneMode') { zoning = !!m.on; d.documentElement.classList.toggle('sd-zoning', zoning); }

@@ -23,13 +23,15 @@ export interface PreviewProps {
   zoneFocus?: { id: string; n: number } | null;
   onZone?(z: { page: number; rect: { x: number; y: number; w: number; h: number }; line: number; excerpt: string }): void;
   onZoneClick?(id: string): void;
+  /** Lien vers une autre page du projet (« sdpage:<id>#ancre »). */
+  onPageLink?(id: string, anchor: string): void;
 }
 
 export interface PageZone { id: string; page: number; rect: { x: number; y: number; w: number; h: number }; n: number; active: boolean; title?: string }
 
 type Device = 'full' | 'tablet' | 'mobile';
 
-export function Preview({ html, mode, pageWidthMm, slideSize, scrollRequest, onSelect, compact, zoneMode, zones, zoneFocus, onZone, onZoneClick }: PreviewProps) {
+export function Preview({ html, mode, pageWidthMm, slideSize, scrollRequest, onSelect, compact, zoneMode, zones, zoneFocus, onZone, onZoneClick, onPageLink }: PreviewProps) {
   const frames = [useRef<HTMLIFrameElement>(null), useRef<HTMLIFrameElement>(null)];
   const stageRef = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState(0);
@@ -105,7 +107,8 @@ export function Preview({ html, mode, pageWidthMm, slideSize, scrollRequest, onS
       if (m.type === 'sd:select') onSelect(m.line);
       if (m.type === 'sd:zone') onZone?.({ page: m.page, rect: m.rect, line: m.line, excerpt: m.excerpt });
       if (m.type === 'sd:zoneClick') onZoneClick?.(m.id);
-      if (m.type === 'sd:link' && /^https?:/i.test(m.href)) window.open(m.href, '_blank', 'noopener,noreferrer');
+      if (m.type === 'sd:link' && /^sdpage:/.test(m.href)) { const [id, a = ''] = m.href.slice(7).split('#'); onPageLink?.(id, a); }
+      else if (m.type === 'sd:link' && /^https?:/i.test(m.href)) window.open(m.href, '_blank', 'noopener,noreferrer');
     };
     window.addEventListener('message', onMsg);
     return () => window.removeEventListener('message', onMsg);

@@ -2,7 +2,7 @@
 //  - « server » : le serveur local (fichiers sur disque, PDF par Chrome) ;
 //  - « browser » : tout dans le navigateur (IndexedDB), pour l'édition web hébergée.
 // Le choix se fait au démarrage : serveur joignable -> server, sinon browser.
-import type { Brand, ComponentPlugin, DocSettings, NotifCategory, NotifChannel, Template, WorkflowTemplate } from '@studio/engine';
+import type { ArchiveReport, Brand, ComponentPlugin, DocSettings, NotifCategory, NotifChannel, SearchDoc, SitePageRef, Template, WorkflowTemplate } from '@studio/engine';
 
 export interface DocSummary { id: string; name: string; project: string; mode: string; templateId: string; createdAt: string; updatedAt: string; words: number; size: number; space?: string; role?: Role }
 export interface Asset { name: string; size: number }
@@ -32,7 +32,20 @@ export interface Collab {
   role: Role; members: Member[]; links?: ShareLink[]; invites?: { email: string; role: Role }[]; publications: Publication[];
   workflow: Workflow; version: number; branchOf?: { docId: string; baseVersion: number; name: string }; owner?: string;
   space?: { id: string; name: string; role: Exclude<Role, 'owner'> };
+  /** Page d'un projet multi-pages : réglages communs, pages voisines, fichiers du projet. */
+  site?: SiteRef;
 }
+export interface SiteRef { id: string; name: string; settings: Partial<DocSettings>; pages: SitePageRef[]; entry?: string; logo?: string; path?: string; files: string[] }
+export interface SiteSummary { id: string; name: string; description?: string; pages: number; updatedAt: string; role: Role; space?: string; templateId: string }
+export interface Site extends Omit<SiteRef, 'files'> {
+  description?: string; role: Role; owner?: string; createdAt: string; updatedAt: string;
+  files: { path: string; size: number }[];
+  source?: { zip: string; importedAt: string; excluded: string[]; rejected: { path: string; reason: string }[] };
+  space?: { id: string; name: string; role: Exclude<Role, 'owner'> };
+  members: Member[]; links?: ShareLink[]; invites?: { email: string; role: Role }[]; publications: Publication[];
+}
+export interface ImportPlan { mode: 'site' | 'merge' | 'separate'; name: string; order: string[]; entry?: string; templateId?: string; fixes?: { path: string; from: string; to: string }[]; titles?: Record<string, string> }
+export type ImportResult = { kind: 'site'; id: string } | { kind: 'doc'; id: string } | { kind: 'docs'; ids: string[]; project: string };
 
 export interface ExportRequest { format: string; mode: string; settings?: Partial<DocSettings>; markdown?: string; pdf?: boolean }
 export interface ExportResult { blob: Blob; name: string; info: any; printed?: boolean }
@@ -69,6 +82,15 @@ export interface Backend {
   removePlugin(id: string): Promise<ComponentPlugin[]>;
 }
 
+/** Clés d'accès des images de l'aperçu (iframe isolée, sans cookie), données par le serveur avec le document ou le projet. */
+const assetKeys = new Map<string, string>();
+const withKey = (url: string, scope: string) => { const k = assetKeys.get(scope); return k ? `${url}?k=${encodeURIComponent(k)}` : url; };
+const keep = <T extends { assetKey?: string; id: string; site?: { id: string; assetKey?: string } }>(d: T, scope: 'doc' | 'site') => {
+  if (d.assetKey) assetKeys.set(`${scope}:${d.id}`, d.assetKey);
+  if (d.site?.assetKey) assetKeys.set(`site:${d.site.id}`, d.site.assetKey);
+  return d;
+};
+
 /** Jeton du lien de partage par lequel on est entré (envoyé à chaque requête). */
 export const shareState = { token: '' as string, guestName: '' as string };
 
@@ -97,7 +119,7 @@ function serverBackend(home: string): Backend {
   return {
     kind: 'server', home, pdf: 'chrome', collab: true,
     list: () => call('GET', '/api/docs'),
-    get: id => call('GET', `/api/docs/${id}`),
+    get: id => call<Doc & { assetKey?: string }>('GET', `/api/docs/${id}`).then(d => keep(d as any, 'doc')),
     create: d => call('POST', '/api/docs', d),
     update: (id, patch) => call('PUT', `/api/docs/${id}`, patch),
     remove: id => call('DELETE', `/api/docs/${id}`),
@@ -107,7 +129,7 @@ function serverBackend(home: string): Backend {
     putAsset: (id, name, data) => call('PUT', `/api/docs/${id}/assets/${encodeURIComponent(name)}`, data),
     deleteAsset: (id, name) => call('DELETE', `/api/docs/${id}/assets/${encodeURIComponent(name)}`),
     assetUrl: (id, name) => `/api/docs/${id}/assets/${encodeURIComponent(name)}`,
-    previewAssetUrl: (id, name) => `${location.origin}/api/docs/${id}/assets/${encodeURIComponent(name)}`,
+    previewAssetUrl: (id, name) => withKey(`${location.origin}/api/docs/${id}/assets/${encodeURIComponent(name)}`, `doc:${id}`),
     themes: () => call('GET', '/api/themes'),
     saveTheme: t => call('POST', '/api/themes', t),
     deleteTheme: id => call('DELETE', `/api/themes/${id}`),
@@ -178,7 +200,49 @@ export const collab = {
   saveWorkflowTemplate: (t: Partial<WorkflowTemplate>) => call<WorkflowTemplate>('POST', '/api/workflow-templates', t),
   deleteWorkflowTemplate: (id: string) => call('DELETE', `/api/workflow-templates/${id}`),
   pubStats: (id: string, pid: string) => call<PubStats>('GET', `/api/docs/${id}/publications/${pid}/stats`),
+  sites: () => call<SiteSummary[]>('GET', '/api/sites'),
+  site: (sid: string) => call<Site>('GET', `/api/sites/${sid}`).then(s => keep(s as any, 'site') as Site),
+  patchSite: (sid: string, b: { name?: string; description?: string; settings?: Partial<DocSettings>; pages?: { id: string; title: string }[]; entry?: string; logo?: string | null }) => call<Site>('PATCH', `/api/sites/${sid}`, b),
+  deleteSite: (sid: string) => call('DELETE', `/api/sites/${sid}`),
+  addSitePage: (sid: string, title: string, folder: string, after?: string) => call<{ site: Site; page: string }>('POST', `/api/sites/${sid}/pages`, { title, folder, after }),
+  removeSitePage: (sid: string, pid: string) => call<Site>('DELETE', `/api/sites/${sid}/pages/${pid}`),
+  putSiteFile: (sid: string, path: string, data: Blob) => call<{ files: { path: string; size: number }[] }>('PUT', `/api/sites/${sid}/files/${path.split('/').map(encodeURIComponent).join('/')}`, data),
+  siteFileUrl: (sid: string, path: string) => withKey(`${location.origin}/api/sites/${sid}/files/${path.split('/').map(encodeURIComponent).join('/')}`, `site:${sid}`),
+  siteSearch: (sid: string) => call<SearchDoc[]>('GET', `/api/sites/${sid}/search`),
+  siteActivity: (sid: string) => call<(Activity & { page?: string; pageTitle?: string })[]>('GET', `/api/sites/${sid}/activity`),
+  addSiteMember: (sid: string, email: string, role: Role) => call<Site>('POST', `/api/sites/${sid}/members`, { email, role }),
+  removeSiteMember: (sid: string, uid: string) => call<Site>('DELETE', `/api/sites/${sid}/members/${encodeURIComponent(uid)}`),
+  addSiteLink: (sid: string, b: { role: string; expiresAt?: string; requireLogin?: boolean; allowDownload?: boolean }) => call<Site>('POST', `/api/sites/${sid}/links`, b),
+  revokeSiteLink: (sid: string, lid: string) => call<Site>('PATCH', `/api/sites/${sid}/links/${lid}`, { revoked: true }),
+  siteSpace: (sid: string, space: string | null, role?: string) => call<Site>('PUT', `/api/sites/${sid}/space`, { space, role }),
+  publishSite: (sid: string, b: { visibility: 'public' | 'members'; label?: string }) => call<Publication & { url: string }>('POST', `/api/sites/${sid}/publish`, b),
+  unpublishSite: (sid: string, pid: string) => call('POST', `/api/sites/${sid}/publications/${pid}/revoke`),
+  exportSite: async (sid: string, b: { format: 'site' | 'pdf' | 'pdf-pages'; cover?: boolean; toc?: boolean }) => fileFrom(await call<Response>('POST', `/api/sites/${sid}/export`, b, true)),
+  siteOriginal: async (sid: string) => fileFrom(await call<Response>('GET', `/api/sites/${sid}/original`, undefined, true)),
+  shareInfo: (token: string) => call<{ docId?: string; siteId?: string; role: Role; name: string; requireLogin: boolean }>('GET', `/api/share/${token}`),
 };
+
+/* ---------- Import d'une archive ZIP ---------- */
+
+/** Envoi de l'archive au serveur, avec progression et annulation, puis analyse côté serveur. */
+export function uploadArchive(file: File, onProgress: (sent: number, total: number) => void, signal: AbortSignal): Promise<{ id: string; report: ArchiveReport }> {
+  return new Promise((ok, ko) => {
+    const x = new XMLHttpRequest();
+    x.open('POST', `/api/imports?name=${encodeURIComponent(file.name)}`);
+    x.upload.onprogress = e => onProgress(e.loaded, e.total || file.size);
+    x.onload = () => {
+      let j: any = {};
+      try { j = JSON.parse(x.responseText); } catch { /* réponse non JSON */ }
+      if (x.status >= 200 && x.status < 300) ok(j); else ko(new Error(j.error || `Erreur ${x.status}`));
+    };
+    x.onerror = () => ko(new Error('Envoi interrompu : vérifiez la connexion.'));
+    x.onabort = () => ko(new DOMException('Import annulé.', 'AbortError'));
+    signal.addEventListener('abort', () => x.abort());
+    x.send(file);
+  });
+}
+export const commitImport = (id: string, plan: ImportPlan) => call<ImportResult>('POST', `/api/imports/${id}/commit`, plan);
+export const cancelImport = (id: string) => call('DELETE', `/api/imports/${id}`).catch(() => {});
 
 let current: Backend | null = null;
 

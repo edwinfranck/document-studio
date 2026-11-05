@@ -12,3 +12,4 @@ export { esc, safeHref, safeSrc } from './html.ts';
 export { fontFaceCss, FONT_FAMILIES, FONT_MANIFEST, type FontFace } from './fonts.ts';
 export * from './collab.ts';
 export { registerPlugins, installedPlugins, checkPlugin, cleanTemplate, type ComponentPlugin } from './plugins.ts';
+export * from './archive.ts';

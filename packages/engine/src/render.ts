@@ -52,8 +52,53 @@ const dl = (ctx: Ctx, n: any) => (ctx.lineAttrs && lineOf(n) ? ` data-line="${li
 /* ---------- Inline ---------- */
 
 function inline(nodes: any[] | undefined, ctx: Ctx): string {
-  return (nodes || []).map(n => inlineNode(n, ctx)).join('');
+  const list = [...(nodes || [])];
+  let out = '';
+  for (let i = 0; i < list.length; i++) {
+    const n = list[i];
+    // Pandoc : « ![x](a.png){width=60%} » ; la largeur s'applique à l'image, l'accolade disparaît
+    const attrs = n.type === 'image' && list[i + 1]?.type === 'text' ? /^\{([^}\n]*)\}/.exec(list[i + 1].value) : null;
+    if (attrs) {
+      out += imageTag(n.url, n.alt, n.title, ctx, n, pandocStyle(attrs[1]));
+      list[i + 1] = { ...list[i + 1], value: list[i + 1].value.slice(attrs[0].length) };
+      continue;
+    }
+    // HTML d'un lien « <a href="…">texte</a> » : rendu comme un lien Markdown, mêmes règles de sûreté
+    if (n.type === 'html' && /^<a\s/i.test(n.value)) {
+      const href = htmlAttrs(n.value).href;
+      const end = list.findIndex((x, k) => k > i && x.type === 'html' && /^<\/a\s*>$/i.test(x.value));
+      if (href && end > 0) { out += inlineNode({ type: 'link', url: href, title: null, children: list.slice(i + 1, end), position: n.position }, ctx); i = end; continue; }
+    }
+    out += inlineNode(n, ctx);
+  }
+  return out;
 }
+
+/** Attributs d'une balise HTML, sans l'interpréter. */
+function htmlAttrs(tag: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const m of tag.matchAll(/([a-zA-Z][\w-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g)) out[m[1].toLowerCase()] = m[2] ?? m[3] ?? m[4];
+  return out;
+}
+
+/** Largeur et hauteur écrites à la manière de Pandoc (« width=60% height=4cm ») ou en attributs HTML. */
+function pandocStyle(spec: string): string {
+  const a = htmlAttrs(spec);
+  const dim = (v?: string) => (v && /^\d+(\.\d+)?$/.test(v) ? `${v}px` : v && safeLength(v));
+  return [dim(a.width) && `width:${dim(a.width)}`, dim(a.height) && `height:${dim(a.height)}`].filter(Boolean).join(';');
+}
+
+/** Paragraphe fait d'une seule image (suivie au plus de ses attributs Pandoc) : une figure. */
+function soleImage(children: any[]): { img: any; style: string } | null {
+  const [a, b, ...rest] = children;
+  if (a?.type !== 'image' || rest.length) return null;
+  if (!b) return { img: a, style: '' };
+  const m = b.type === 'text' && /^\{([^}\n]*)\}\s*$/.exec(b.value);
+  return m ? { img: a, style: pandocStyle(m[1]) } : null;
+}
+
+/** Commandes LaTeX seules sur leur ligne (« \\newpage », « \\vspace{3em} ») : saut de page, sinon ignorées. */
+const LATEX = /^(\\[a-zA-Z]+\*?(\{[^}]*\})*\s*)+$/;
 
 function text(s: string, ctx: Ctx) {
   const e = esc(s);
@@ -70,6 +115,12 @@ function inlineNode(n: any, ctx: Ctx): string {
     case 'break': return '<br>';
     case 'inlineMath': return mathHtml(n.value, false, ctx, n);
     case 'link': {
+      const custom = ctx.env.resolveLink?.(String(n.url));
+      if (custom === null) {
+        ctx.diags.push({ severity: 'warning', line: lineOf(n), code: 'broken-page-link', message: `Lien vers une page absente du projet : ${String(n.url).slice(0, 80)}` });
+        return `<span class="sd-dead-link" title="Page introuvable : ${esc(n.url)}">${inline(n.children, ctx)}</span>`;
+      }
+      if (custom) return `<a href="${esc(custom)}"${attr('title', n.title)}>${inline(n.children, ctx)}</a>`;
       const href = safeHref(n.url);
       if (!href) {
         ctx.diags.push({ severity: 'warning', line: lineOf(n), code: 'unsafe-link', message: `Lien neutralisé (schéma non autorisé) : ${String(n.url).slice(0, 60)}` });
@@ -93,10 +144,16 @@ function inlineNode(n: any, ctx: Ctx): string {
 
 const slug = (s: string) => s.replace(/[^\w-]/g, '_');
 
-function rawHtml(n: any, _ctx: Ctx): string {
+function rawHtml(n: any, ctx: Ctx): string {
   const v = String(n.value);
   if (/^\s*<!--[\s\S]*-->\s*$/.test(v)) return '';
-  if (/^\s*<br\s*\/?>\s*$/i.test(v)) return '<br>';
+  if (/^\s*<\/?br\s*\/?>\s*$/i.test(v)) return '<br>';
+  // Image en HTML (fréquente dans les README) : reconstruite à partir de ses seuls attributs sûrs.
+  if (/^\s*<img\s[^>]*>\s*$/i.test(v)) {
+    const a = htmlAttrs(v);
+    const float = a.align === 'right' || a.align === 'left' ? `float:${a.align};margin:${a.align === 'right' ? '0 0 1em 1.5em' : '0 1.5em 1em 0'}` : '';
+    return imageTag(a.src || '', a.alt, a.title, ctx, n, [pandocStyle([a.width && `width=${a.width}`, a.height && `height=${a.height}`].filter(Boolean).join(' ')), float].filter(Boolean).join(';'));
+  }
   return `<code class="sd-raw-html" title="HTML brut non interprété">${esc(v)}</code>`;
 }
 
@@ -131,9 +188,16 @@ function block(n: any, ctx: Ctx): string {
   switch (n.type) {
     case 'heading': return heading(n, ctx);
     case 'paragraph': {
+      const raw = textOf(n).trim();
+      if (n.children.every((c: any) => c.type === 'text') && LATEX.test(raw)) {
+        if (/\\(newpage|pagebreak|clearpage)\b/.test(raw)) return `<div class="sd-pagebreak" aria-hidden="true"${dl(ctx, n)}></div>`;
+        ctx.diags.push({ severity: 'info', line: lineOf(n), code: 'latex', message: `Commande LaTeX ignorée : ${raw.slice(0, 60)}` });
+        return '';
+      }
       // un paragraphe qui ne contient qu'une image devient une figure
-      const only = n.children.length === 1 && n.children[0].type === 'image' ? n.children[0] : null;
-      if (only) return `<figure class="sd-figure"${dl(ctx, n)}>${imageTag(only.url, only.alt, only.title, ctx, only)}${only.title ? `<figcaption>${text(only.title, ctx)}</figcaption>` : ''}</figure>`;
+      const sole = soleImage(n.children);
+      const only = sole?.img;
+      if (only) return `<figure class="sd-figure"${dl(ctx, n)}>${imageTag(only.url, only.alt, only.title, ctx, only, sole!.style)}${only.title ? `<figcaption>${text(only.title, ctx)}</figcaption>` : ''}</figure>`;
       return `<p${dl(ctx, n)}>${inline(n.children, ctx)}</p>`;
     }
     case 'blockquote': return `<blockquote${dl(ctx, n)}>${blocks(n.children, ctx)}</blockquote>`;

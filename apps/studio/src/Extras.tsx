@@ -1,6 +1,6 @@
 // Fonctions avancées : branches et fusion, bibliothèque de blocs réutilisables, identités visuelles, comparaison de gabarits.
 import { useEffect, useMemo, useState } from 'react';
-import { Blocks, Copy, GitBranch, GitMerge, Link2, Plus, RefreshCw, Stamp, Trash2, Unlink } from 'lucide-react';
+import { Blocks, BookOpen, ChevronLeft, ChevronRight, Copy, FolderTree, GitBranch, GitMerge, Link2, Plus, RefreshCw, Stamp, Trash2, Unlink } from 'lucide-react';
 import { findIncludes, lineDiff, render, type Target } from '@studio/engine';
 import { collab, type Block, type BrandOut, type Doc } from './api.ts';
 import { previewEnv } from './env.ts';
@@ -207,6 +207,25 @@ export function BrandSection({ onSettings }: { onSettings: () => void }) {
       {list && list.some(b => b.cover) && <Toggle checked={cover} onChange={setCover}>Insérer aussi la couverture de l'identité</Toggle>}
       <button className="btn sm ghost" onClick={onSettings}><Plus />Gérer les identités</button>
       <div className="token-help">Appliquer change la présentation (couleurs, polices, pieds de page, logos copiés dans les fichiers du document), jamais le texte, sauf la couverture si vous la demandez.</div>
+    </div>
+  );
+}
+
+/* ---------- Page d'un projet multi-pages ---------- */
+
+/** Au-dessus d'une page de projet : retour au projet, pages voisines, rappel que les réglages valent pour cette page. */
+export function SitePageBar({ doc }: { doc: Doc }) {
+  const site = doc.site;
+  if (!site) return null;
+  const i = site.pages.findIndex(p => p.id === doc.id);
+  const prev = site.pages[i - 1], next = site.pages[i + 1];
+  return (
+    <div className="branch-banner site-bar">
+      <FolderTree />
+      <span className="grow">Page {i + 1} sur {site.pages.length} du projet <a href={`#/site/${site.id}/${doc.id}`}>« {site.name} »</a>. Les réglages faits ici ne valent que pour cette page ; l'apparence commune se règle dans le projet.</span>
+      <a className="btn sm ghost icon" href={prev ? `#/doc/${prev.id}` : undefined} aria-disabled={!prev} title={prev ? `Page précédente : ${prev.title}` : ''} aria-label="Page précédente"><ChevronLeft /></a>
+      <a className="btn sm ghost icon" href={next ? `#/doc/${next.id}` : undefined} aria-disabled={!next} title={next ? `Page suivante : ${next.title}` : ''} aria-label="Page suivante"><ChevronRight /></a>
+      <a className="btn sm" href={`#/site/${site.id}/${doc.id}`}><BookOpen />Lire le projet</a>
     </div>
   );
 }

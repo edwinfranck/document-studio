@@ -277,3 +277,15 @@ export function brandSummary(a: Partial<Brand> | undefined, b: Brand): string {
 /* ---------- Modèles de validation ---------- */
 
 export interface WorkflowTemplate { id: string; name: string; reviewers: string[]; requiredApprovals: number; owner: string; space?: string; updatedAt: string }
+
+/** Ce qui, dans `full`, diffère de `base` : les réglages propres à une page d'un projet. */
+export function settingsOverrides<T>(base: T, full: T): Partial<T> {
+  const isO = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys((full || {}) as object)) {
+    const a = (base as any)?.[k], b = (full as any)[k];
+    if (isO(a) && isO(b)) { const d = settingsOverrides(a, b); if (Object.keys(d).length) out[k] = d; }
+    else if (JSON.stringify(a) !== JSON.stringify(b)) out[k] = b;
+  }
+  return out as Partial<T>;
+}

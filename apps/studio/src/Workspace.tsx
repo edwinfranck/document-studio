@@ -10,16 +10,16 @@ import {
 } from 'lucide-react';
 import { DEFAULT_SETTINGS, offsetMapper, render, resolveTheme, SLIDE_SIZES, suggestionHunks, type ComponentNode, type Diagnostic, type DocSettings, type Target } from '@studio/engine';
 import { api, collab, download, shareState, type Block, type Comment, type Role } from './api.ts';
-import { findAsset, previewEnv } from './env.ts';
+import { findAsset, previewEnv, sitePageEnv } from './env.ts';
 import { createEditor, editorRedo, editorUndo, goToLine, insertAt, replaceAll, rewriteOpener, setComments, setLint, trackChanges, type CommentRange } from './editor.ts';
-import { recordTextStep, redoAction, saveNow, undoAction, useStudio } from './store.ts';
+import { effectiveSettings, recordTextStep, redoAction, saveNow, undoAction, useStudio } from './store.ts';
 import { Provider } from './collabClient.ts';
 import { Preview, type PageZone } from './Preview.tsx';
 import { Inspector } from './Inspector.tsx';
 import { TemplateGallery } from './TemplateGallery.tsx';
 import { ShareDialog } from './ShareDialog.tsx';
 import { ActivityPanel, canDo, CommentsPanel, HistoryPanel, NotificationsBell, Presence, SyncState, WorkflowControl, type Selection, type ZoneSel } from './CollabPanels.tsx';
-import { BlocksSection, BrandSection, BranchBanner, BranchButton, CompareTemplates } from './Extras.tsx';
+import { BlocksSection, BrandSection, BranchBanner, BranchButton, CompareTemplates, SitePageBar } from './Extras.tsx';
 import { SettingsDialog, type SettingsTab } from './Settings.tsx';
 import { Menu, Modal, Resizer, Segmented, fmtDate, fmtSize, usePersisted } from './ui.tsx';
 
@@ -116,18 +116,20 @@ export function Workspace({ onBack }: { onBack: () => void }) {
       if (!alive) return;
       const text = p.text.toString();
       const s = p.meta.get('settings') as Partial<DocSettings> | undefined;
-      useStudio.setState(x => ({ markdown: text || x.markdown, settings: s ? { ...DEFAULT_SETTINGS, ...s } : x.settings }));
+      useStudio.setState(x => ({ markdown: text || x.markdown, settings: s ? effectiveSettings(s, x.doc) : x.settings }));
       setReady(true);
     });
     const onMeta = (e: Y.YMapEvent<unknown>) => {
       if (e.transaction.local) return;
       const s = p.meta.get('settings') as Partial<DocSettings> | undefined;
-      if (s) useStudio.setState(x => ({ settings: { ...DEFAULT_SETTINGS, ...s, mode: x.settings.mode } }));
+      if (s) useStudio.setState(x => ({ settings: { ...effectiveSettings(s, x.doc), mode: x.settings.mode } }));
     };
     p.meta.observe(onMeta);
     const offEv = p.onEvent(e => {
       if (e.type === 'comments') loadComments();
       if (e.type === 'workflow' || e.type === 'versions') refreshDoc();
+      // l'apparence commune du projet a changé : la page la reprend, avec ses propres réglages par-dessus
+      if (e.type === 'site') api.get(doc.id).then(n => useStudio.setState(x => ({ doc: x.doc && { ...x.doc, site: n.site }, settings: { ...effectiveSettings((p.meta.get('settings') as any) || {}, { ...x.doc!, site: n.site }), mode: x.settings.mode } })), () => {});
     });
     const offSt = p.subscribe(() => { if (p.status === 'denied') toast('Votre accès à ce document a été retiré.', 'error'); });
     loadComments(); loadBlocks();
@@ -141,7 +143,8 @@ export function Workspace({ onBack }: { onBack: () => void }) {
   const assets = doc?.assets || [];
   const result = useMemo(() => {
     if (!doc) return null;
-    try { return render(md, s, previewEnv(doc.id, assets), templates, bid => blocks.find(b => b.id === bid) as any); }
+    const env = doc.site?.path ? sitePageEnv(doc.id, assets, doc.site, doc.site.path, (id, a) => `sdpage:${id}${a ? '#' + a : ''}`) : previewEnv(doc.id, assets);
+    try { return render(md, s, env, templates, bid => blocks.find(b => b.id === bid) as any); }
     catch (e: any) { console.error(e); return null; }
   }, [md, s, assets, templates, doc?.id, blocks, st.pluginsRev]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -530,6 +533,7 @@ export function Workspace({ onBack }: { onBack: () => void }) {
       zoneMode={zoneMode} zones={zones} zoneFocus={zoneFocus}
       onZone={z => { setZoneMode(false); setZoneDraft(z); openPanel('comments'); }}
       onZoneClick={id => { setActiveComment(id); openPanel('comments'); }}
+      onPageLink={id => { location.hash = `#/doc/${id}`; }}
       onSelect={line => { useStudio.setState({ selectedLine: line }); if (viewRef.current && showSource) goToLine(viewRef.current, line, false); }} />
   ) : <div className="empty"><AlertCircle className="big" /><h2>Rendu impossible</h2><p>Le détail est dans la console du navigateur.</p></div>;
 
@@ -572,6 +576,7 @@ export function Workspace({ onBack }: { onBack: () => void }) {
         </header>
         {collabOn && doc.workflow && <div className="mobile-strip"><WorkflowControl docId={doc.id} workflow={doc.workflow} role={role} members={doc.members || []} onChange={w => useStudio.setState(x => ({ doc: x.doc && { ...x.doc, workflow: w } }))} />{roleBadge}</div>}
         <BranchBanner doc={doc} onMerged={refreshDoc} />
+        <SitePageBar doc={doc} />
         <main className="mobile-main">
           {mobileView === 'preview' && <section className="pane pane-center">{preview}</section>}
           {mobileView === 'source' && <section className="pane">{sourcePane}</section>}
@@ -622,6 +627,7 @@ export function Workspace({ onBack }: { onBack: () => void }) {
         {docMenu}
       </header>
       <BranchBanner doc={doc} onMerged={refreshDoc} />
+      <SitePageBar doc={doc} />
       <div className={'work work-' + layout}>
         {leftOpen && (
           <>

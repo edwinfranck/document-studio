@@ -40,6 +40,7 @@ Seule, sans proxy : `docker run -p 4317:4317 -v studio-data:/data ghcr.io/edwinf
 | `STUDIO_MAIL_FROM` | expéditeur des e-mails | `Document Studio <no-reply@localhost>` |
 | `STUDIO_MAIL_DIR` | écrit les e-mails dans ce dossier au lieu de les envoyer (essais) | — |
 | `STUDIO_CHROME` | chemin de Chrome ou Chromium pour les PDF | recherche automatique |
+| `STUDIO_IMPORT_MAX_MB`, `STUDIO_IMPORT_MAX_FILE_MB`, `STUDIO_IMPORT_MAX_FILES`, `STUDIO_IMPORT_MAX_DEPTH` | limites des archives ZIP importées | 300 Mo, 50 Mo, 2 000 fichiers, 12 niveaux |
 | `STUDIO_CHROME_NO_SANDBOX` | `1` en conteneur (le bac à sable de Chromium n'y a pas les espaces de noms requis) | `1` dans l'image |
 
 ## Autre proxy que Caddy
@@ -54,7 +55,7 @@ location / {
   proxy_set_header Connection "upgrade";
   proxy_set_header X-Forwarded-Proto $scheme;
   proxy_read_timeout 1h;
-  client_max_body_size 60m;      # images et vidéos déposées dans les documents
+  client_max_body_size 300m;     # archives ZIP importées, images et vidéos
 }
 ```
 

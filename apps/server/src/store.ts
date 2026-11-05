@@ -25,7 +25,7 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import {
-  brandSummary, changeStats, DEFAULT_WORKFLOW, maxRole, slugify,
+  brandSummary, changeStats, DEFAULT_WORKFLOW, maxRole, rank, slugify,
   type Brand, type DocSettings, type LibBlock, type Role, type Template, type Workflow, type WorkflowTemplate,
 } from '@studio/engine';
 
@@ -69,6 +69,8 @@ export interface DocMetaFile {
   branchOf?: { docId: string; baseVersion: number; base: string; name: string };
   space?: string;                       // espace d'équipe auquel le document appartient
   spaceRole?: Exclude<Role, 'owner'>;   // rôle donné aux membres de l'espace
+  site?: string;                        // projet multi-pages dont le document est une page
+  sitePath?: string;                    // chemin de la page dans le projet (« guide/installation.md »)
 }
 
 export interface DocSummary {
@@ -130,10 +132,22 @@ export const writeMarkdownFile = (id: string, md: string) => writeAtomic(join(di
 
 /* ---------- Droits ---------- */
 
-export interface Access { role: Role | null; via: 'owner' | 'member' | 'space' | 'link' | null; link?: ShareLink }
+export interface Access { role: Role | null; via: 'owner' | 'member' | 'space' | 'link' | 'site' | null; link?: ShareLink }
+
+/** Accès hérité d'un projet multi-pages (branché par sites.ts, qui lit les projets). */
+let siteAccess: (siteId: string, userId: string | null, share?: string | null) => Access | null = () => null;
+export function setSiteAccess(fn: typeof siteAccess) { siteAccess = fn; }
 
 /** Rôle effectif : propriétaire, membre, membre de l'espace du document, et lien de partage valide s'il est présenté. */
 export function accessOf(m: DocMetaFile, userId: string | null, shareToken?: string | null): Access {
+  const own = docAccess(m, userId, shareToken);
+  if (!m.site || own.role === 'owner') return own;
+  // Une page de projet est ouverte à ceux qui ont accès au projet, avec leur rôle sur le projet.
+  const s = siteAccess(m.site, userId, shareToken);
+  return s?.role && rank(s.role) > rank(own.role) ? { role: s.role, via: 'site', link: s.link } : own;
+}
+
+function docAccess(m: DocMetaFile, userId: string | null, shareToken?: string | null): Access {
   let role: Role | null = null;
   let via: Access['via'] = null;
   if (userId && m.owner === userId) return { role: 'owner', via: 'owner' };
@@ -170,7 +184,8 @@ export function listDocs(userId: string): DocSummary[] {
   for (const id of readdirSync(DOCS)) {
     const dir = join(DOCS, id);
     const m = readJson<DocMetaFile | null>(join(dir, 'studio.json'), null);
-    if (!m) continue;
+    // les pages d'un projet se retrouvent dans le projet, pas dans la liste des documents
+    if (!m || m.site) continue;
     const a = accessOf(m, userId);
     if (!a.role) continue;
     try {

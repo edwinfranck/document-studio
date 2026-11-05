@@ -1,7 +1,7 @@
 // Assemblage des trois sorties : page de lecture, document paginé (Paged.js), diaporama.
 // Chacune produit un HTML complet et autonome à partir du même IR et du même thème.
 
-import type { Block, ComponentNode, DocMeta, DocSettings, DocumentIR, RenderEnv, Target, Template } from './types.ts';
+import type { Block, ComponentNode, DocMeta, DocSettings, DocumentIR, RenderEnv, SiteContext, SiteNavItem, Target, Template } from './types.ts';
 import { blocks, component, footnotesHtml, newCtx, tocHtml, type Ctx } from './render.ts';
 import { esc, frenchSpacing } from './html.ts';
 import { parse, sortDiags, textOf } from './parse.ts';
@@ -20,7 +20,7 @@ export interface RenderResult {
 
 const PAGE_SIZES: Record<string, [number, number]> = { A4: [210, 297], A3: [297, 420], A5: [148, 210], Letter: [215.9, 279.4], Legal: [215.9, 355.6] };
 
-export function render(source: string, settings: Partial<DocSettings>, env: RenderEnv, templates?: Template[], blocks?: (id: string) => LibraryBlock | undefined): RenderResult {
+export function render(source: string, settings: Partial<DocSettings>, env: RenderEnv, templates?: Template[], blocks?: (id: string) => LibraryBlock | undefined, site?: SiteContext): RenderResult {
   const theme = resolveTheme(settings, templates);
   const ir = parse(source, { numbering: theme.tokens.layout.numbering, numberingDepth: theme.tokens.layout.numberingDepth, blocks });
   const meta: DocMeta = { ...(settings.meta || {}), ...stripEmpty(ir.meta) };
@@ -33,7 +33,7 @@ export function render(source: string, settings: Partial<DocSettings>, env: Rend
     const r = slidesDoc(ir, meta, theme, ctx, settings);
     html = r.html; slideCount = r.count;
   } else if (target === 'print') html = printDoc(ir, meta, theme, ctx, settings);
-  else html = readingDoc(ir, meta, theme, ctx, settings);
+  else html = readingDoc(ir, meta, theme, ctx, settings, site);
   const diagnostics = sortDiags([...ir.diagnostics, ...dedupe(ctx.diags)]);
   return { html, ir, theme, diagnostics, slideCount };
 }
@@ -106,8 +106,9 @@ function hasToc(list: Block[]): boolean {
 
 /* ---------- Lecture ---------- */
 
-function readingDoc(ir: DocumentIR, meta: DocMeta, theme: ResolvedTheme, ctx: Ctx, settings: Partial<DocSettings>): string {
+function readingDoc(ir: DocumentIR, meta: DocMeta, theme: ResolvedTheme, ctx: Ctx, settings: Partial<DocSettings>, site?: SiteContext): string {
   const r = theme.reading;
+  if (site) return sitePage(ir, meta, theme, ctx, settings, site);
   const body = blocks(ir.blocks.slice(ir.titleBlocks), ctx) + footnotesHtml(ctx);
   const cover = findCover(ir.blocks);
   const head = cover
@@ -143,6 +144,72 @@ function readingDoc(ir: DocumentIR, meta: DocMeta, theme: ResolvedTheme, ctx: Ct
 </div>
 ${bridge(ctx.env, 'reading')}
 <script>${A.reading_js}</script>
+</body>
+</html>`;
+}
+
+/* ---------- Page d'un projet multi-pages ---------- */
+
+const SVG = {
+  menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>',
+  search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+  scheme: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>',
+};
+
+function navHtml(items: SiteNavItem[], site: SiteContext, ctx: Ctx): string {
+  return `<ul>${items.map(it => {
+    const self = it.id ? `<a href="${esc(site.href(it.id))}"${it.id === site.current ? ' aria-current="page"' : ''}>${txt(it.title, ctx)}</a>` : '';
+    if (!it.children.length) return `<li>${self}</li>`;
+    return `<li>${it.id ? self.replace('<a ', '<a class="sd-nav-group" ') : `<span class="sd-nav-group">${txt(it.title, ctx)}</span>`}${navHtml(it.children, site, ctx)}</li>`;
+  }).join('')}</ul>`;
+}
+
+function sitePage(ir: DocumentIR, meta: DocMeta, theme: ResolvedTheme, ctx: Ctx, settings: Partial<DocSettings>, site: SiteContext): string {
+  const body = blocks(ir.blocks.slice(ir.titleBlocks), ctx) + footnotesHtml(ctx);
+  const cover = findCover(ir.blocks);
+  const head = cover
+    ? `<header class="sd-doc-head sd-doc-head-custom">${blocks(cover.children, ctx)}</header>`
+    : `<header class="sd-doc-head"><h1 class="sd-title">${txt(String(meta.title), ctx)}</h1>${meta.subtitle ? `<p class="sd-subtitle">${txt(String(meta.subtitle), ctx)}</p>` : ''}</header>`;
+  const pageToc = ir.headings.filter(h => h.depth >= 2).length >= 2 ? tocHtml(ir.headings.filter(h => h.depth >= 2), 3, ctx, 'sd-toc') : '';
+  const crumbs = site.crumbs.length > 1 ? `<nav class="sd-crumbs" aria-label="Fil d'Ariane">${site.crumbs.map((c, i) => (i ? '<span aria-hidden="true">/</span>' : '') + (c.id && c.id !== site.current ? `<a href="${esc(site.href(c.id))}">${txt(c.title, ctx)}</a>` : `<span>${txt(c.title, ctx)}</span>`)).join('')}</nav>` : '';
+  const pager = site.prev || site.next ? `<nav class="sd-pager" aria-label="Pages voisines">${site.prev ? `<a class="sd-prev" href="${esc(site.href(site.prev.id))}"><small>Page précédente</small>${txt(site.prev.title, ctx)}</a>` : ''}${site.next ? `<a class="sd-next" href="${esc(site.href(site.next.id))}"><small>Page suivante</small>${txt(site.next.title, ctx)}</a>` : ''}</nav>` : '';
+  // adresses des pages, pour les résultats de recherche (relatives à cette page dans un site exporté)
+  const ids: string[] = [];
+  const walk = (l: SiteNavItem[]) => l.forEach(n => { if (n.id) ids.push(n.id); walk(n.children); });
+  walk(site.nav);
+  const hrefs = `<script>window.__SD_SITE_HREFS=${JSON.stringify(Object.fromEntries(ids.map(id => [id, site.href(id)]))).replace(/</g, '\\u003c')};</script>`;
+  const index = site.search?.inline ? `<script>window.__SD_SEARCH=${JSON.stringify(site.search.inline.map(p => ({ ...p, href: site.href(p.id) }))).replace(/</g, '\\u003c')};</script>` : '';
+  const cls = `sd sd-reading sd-site ${themeClasses(theme.tokens)} sd-toc-side${pageToc ? '' : ' sd-no-pagetoc'}`;
+  const r = theme.reading;
+  return `<!doctype html>
+<html lang="${esc(meta.lang || 'fr')}" data-scheme="${esc(r.colorScheme)}" data-alt="${isDark(theme.tokens.colors.bg) ? 'light' : 'dark'}">
+<head>${headHtml({ ...meta, title: `${meta.title} · ${site.name}` }, theme, 'reading', ctx.env, settings, ctx, A.site_css)}</head>
+<body class="${cls}">
+<a class="sd-skip" href="#sd-content">Aller au contenu</a>
+<div class="sd-topbar" role="banner">
+  ${r.progress ? '<div class="sd-progress" aria-hidden="true"><span></span></div>' : ''}
+  <button class="sd-btn sd-nav-toggle" type="button" aria-label="Pages du projet" aria-expanded="false">${SVG.menu}</button>
+  <div class="sd-topbar-title"><a href="${esc(site.href(site.home || site.current))}">${site.logo ? `<img class="sd-site-logo" src="${esc(site.logo)}" alt="">` : ''}<span class="sd-site-name">${txt(site.name, ctx)}</span></a></div>
+  <div class="sd-topbar-tools">
+    ${site.search ? `<button class="sd-btn sd-site-search-toggle" type="button" aria-label="Rechercher dans le projet (Ctrl+K)">${SVG.search}</button>` : ''}
+    <button class="sd-btn sd-scheme-toggle" type="button" aria-label="Mode clair ou sombre">${SVG.scheme}</button>
+  </div>
+  ${site.search ? `<div class="sd-site-search" hidden${site.search.src ? ` data-index="${esc(site.search.src)}"` : ''}><input type="search" placeholder="Rechercher dans toutes les pages" aria-label="Rechercher dans toutes les pages"><div class="sd-site-results" role="listbox"></div></div>` : ''}
+</div>
+<div class="sd-layout">
+  <nav class="sd-site-nav" aria-label="Pages du projet">${navHtml(site.nav, site, ctx)}</nav>
+  <main class="sd-main" id="sd-content">
+    ${crumbs}
+    ${head}
+    <article class="sd-body">${body}</article>
+    ${pager}
+  </main>
+  ${pageToc ? `<aside class="sd-toc-wrap">${pageToc.replace('<div class="sd-toc-title">Sommaire</div>', '<div class="sd-toc-title">Sur cette page</div>')}</aside>` : ''}
+</div>
+${hrefs}${index}
+${bridge(ctx.env, 'reading')}
+<script>${A.reading_js}</script>
+<script>${A.site_js}</script>
 </body>
 </html>`;
 }

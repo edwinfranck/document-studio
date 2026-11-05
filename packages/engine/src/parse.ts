@@ -205,7 +205,9 @@ export function parse(source: string, opts: ParseOptions = {}): DocumentIR {
     if (n.type === 'component' && typeof n.attrs?.src === 'string') assets.push(n.attrs.src);
     if (n.type === 'component' && typeof n.attrs?.poster === 'string') assets.push(n.attrs.poster);
     if (n.type === 'component' && typeof n.attrs?.image === 'string') assets.push(n.attrs.image);
-    if (n.type === 'html' && !/^\s*<!--[\s\S]*-->\s*$/.test(n.value) && !/^\s*<br\s*\/?>\s*$/i.test(n.value))
+    // <img>, <a href> et <br> sont reconstruits par le moteur (attributs sûrs seulement) ; le reste est affiché en texte
+    if (n.type === 'html' && /^\s*<img\s/i.test(n.value)) { const src = /\ssrc\s*=\s*["']?([^"'\s>]+)/i.exec(n.value)?.[1]; if (src) assets.push(src); }
+    if (n.type === 'html' && !/^\s*(<!--[\s\S]*-->|<\/?br\s*\/?>|<img\s[^>]*>|<a\s[^>]*>|<\/a\s*>)\s*$/i.test(n.value))
       diags.push({ severity: 'warning', line: n.position?.start.line ?? 0, code: 'raw-html', message: 'HTML brut non interprété (sécurité) : il est affiché comme du texte. Utilisez un composant StudioMD.' });
   });
 
@@ -217,9 +219,11 @@ export function parse(source: string, opts: ParseOptions = {}): DocumentIR {
     meta.title = textOf(first).trim();
     titleBlocks = 1;
     const next = blocks[1] as any;
-    if (!meta.subtitle && next && (next.type === 'blockquote' || next.type === 'paragraph')) {
+    // un paragraphe qui porte une image n'est pas un chapeau : il resterait invisible
+    const hasMedia = (n: any): boolean => n?.type === 'image' || n?.type === 'imageReference' || (n?.children || []).some(hasMedia);
+    if (!meta.subtitle && next && (next.type === 'blockquote' || next.type === 'paragraph') && !hasMedia(next)) {
       const t = textOf(next).trim();
-      if (t.length <= 240) { meta.subtitle = t; titleBlocks = 2; }
+      if (t && t.length <= 240) { meta.subtitle = t; titleBlocks = 2; }
     } else if (!meta.subtitle && next?.type === 'heading' && next.depth === 2) {
       // « ## » juste sous le titre : sous-titre s'il n'ouvre pas une vraie section, c'est-à-dire s'il est suivi
       // directement d'un autre titre, ou d'un séparateur « --- » avant le titre suivant (en-tête de compte rendu).

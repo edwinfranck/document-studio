@@ -169,6 +169,34 @@ describe('sous-titre de couverture', () => {
   });
 });
 
+describe('image sous le titre', () => {
+  it('une image placée juste sous le titre reste affichée, elle ne devient pas sous-titre', () => {
+    const r = render('# Guide\n\n![Schéma](data:image/png;base64,iVBORw0KGgo=)\n\nSuite.\n', { mode: 'reading' }, nodeEnv());
+    expect(r.ir.meta.subtitle).toBeUndefined();
+    expect(r.html).toContain('alt="Schéma"');
+  });
+});
+
+describe('écritures Pandoc et HTML courantes', () => {
+  const env = { ...nodeEnv(), resolveAsset: (s: string) => 'R/' + s };
+  it('largeur d\'image Pandoc, saut de page LaTeX, commandes LaTeX ignorées et signalées', () => {
+    const r = render('# T\n\nIntro.\n\n![Persona](p.png){width=60%}\n\n\\newpage\n\n\\vspace{3em}\n\nFin.\n', { mode: 'print' }, env);
+    expect(r.html).toContain('<img src="R/p.png" alt="Persona" style="width:60%">');
+    expect(r.html).not.toContain('{width=60%}');
+    expect(r.html).toContain('class="sd-pagebreak"');
+    expect(r.html).not.toContain('vspace');
+    expect(r.diagnostics.find(d => d.code === 'latex')?.severity).toBe('info');
+  });
+  it('<img>, <a href> et <br> reconstruits avec leurs seuls attributs sûrs', () => {
+    const r = render('# T\n\nIntro.\n\n<img src="logo.png" alt="logo" align="right" height="170" onerror="alert(1)"/>\n\nVoir <a href="https://epitech.eu">le site</a>, <a href="javascript:alert(1)">piège</a>.</br>\n', { mode: 'reading' }, env);
+    expect(r.html).toContain('<img src="R/logo.png" alt="logo" style="height:170px;float:right;margin:0 0 1em 1.5em"');
+    expect(r.html).not.toMatch(/onerror|javascript:/);
+    expect(r.html).toContain('<a href="https://epitech.eu" rel="noopener noreferrer" target="_blank">le site</a>');
+    expect(r.html).toContain('<span class="sd-dead-link">piège</span>');
+    expect(r.diagnostics.filter(d => d.code === 'raw-html')).toEqual([]);
+  });
+});
+
 describe('ancres des titres', () => {
   it('un titre qui commence par un chiffre donne un identifiant CSS valide', () => {
     const ir = parse('# Rapport\n\n## 1. Contexte et objectifs\n\n### 2.1. Transformation\n\n## 2026 en chiffres');

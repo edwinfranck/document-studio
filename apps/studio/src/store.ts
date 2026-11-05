@@ -1,6 +1,6 @@
 // État de l'application : document ouvert, réglages, sauvegarde automatique, annuler/rétablir.
 import { create } from 'zustand';
-import { BUILTIN_TEMPLATES, DEFAULT_SETTINGS, type Diagnostic, type DocSettings, type Template } from '@studio/engine';
+import { BUILTIN_TEMPLATES, DEFAULT_SETTINGS, merge, settingsOverrides, type Diagnostic, type DocSettings, type Template } from '@studio/engine';
 import { api, type Doc } from './api.ts';
 import type { Provider } from './collabClient.ts';
 
@@ -44,6 +44,12 @@ interface State {
 }
 
 const withDefaults = (s: Partial<DocSettings>): DocSettings => ({ ...DEFAULT_SETTINGS, ...s });
+/** Réglages affichés : pour une page de projet, ceux du projet complétés par ce que la page change. */
+export const effectiveSettings = (raw: Partial<DocSettings>, doc?: Doc | null): DocSettings =>
+  withDefaults(doc?.site ? (merge(doc.site.settings as any, raw as any) as Partial<DocSettings>) : raw);
+/** Réglages enregistrés : pour une page de projet, seulement ses écarts avec le projet. */
+const storedSettings = (s: DocSettings, doc?: Doc | null): Partial<DocSettings> =>
+  doc?.site ? settingsOverrides(effectiveSettings({}, doc), s) : s;
 
 let timer: ReturnType<typeof setTimeout> | undefined;
 let lastCoalesce = '';
@@ -67,7 +73,7 @@ function schedule() {
   const p = useStudio.getState().provider;
   if (p) {
     // Lecteurs et commentateurs : changer de vue reste local, rien n'est écrit dans le document partagé.
-    if (p.role === 'editor' || p.role === 'owner') p.meta.set('settings', useStudio.getState().settings);
+    if (p.role === 'editor' || p.role === 'owner') p.meta.set('settings', storedSettings(useStudio.getState().settings, useStudio.getState().doc));
     return;
   }
   useStudio.setState({ save: 'dirty' });
@@ -83,7 +89,7 @@ export const useStudio = create<State>((set, get) => {
     doc: null, markdown: '', settings: withDefaults({}), save: 'saved', saveError: '',
     templates: BUILTIN_TEMPLATES, userTemplates: [], diagnostics: [], runtime: [], selectedLine: null, toasts: [], provider: null, me: null, prefs: null, mailEnabled: false, pluginsRev: 0, currentSlide: 0,
     undoLog: [], redoLog: [], settingsPast: [], settingsFuture: [],
-    open: doc => set({ doc, markdown: doc.markdown, settings: withDefaults(doc.settings), save: 'saved', undoLog: [], redoLog: [], settingsPast: [], settingsFuture: [], runtime: [], selectedLine: null }),
+    open: doc => set({ doc, markdown: doc.markdown, settings: effectiveSettings(doc.settings, doc), save: 'saved', undoLog: [], redoLog: [], settingsPast: [], settingsFuture: [], runtime: [], selectedLine: null }),
     close: () => { clearTimeout(timer); if (get().save === 'dirty') flush(); set({ doc: null, provider: null }); },
     setMarkdown: md => { if (md !== get().markdown) { set({ markdown: md }); if (!get().provider) schedule(); } },
     setSettings: (fn, coalesce) => {

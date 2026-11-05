@@ -7,9 +7,11 @@ import { useStudio } from './store.ts';
 import { loadPlugins } from './plugins.ts';
 import { Library } from './Library.tsx';
 import { Workspace } from './Workspace.tsx';
+import { SiteReader } from './SiteReader.tsx';
 import { AuthScreen } from './AuthScreen.tsx';
 
 const route = () => { const m = /^#\/doc\/([\w-]+)/.exec(location.hash); return m ? m[1] : null; };
+const siteRoute = () => { const m = /^#\/site\/([\w-]+)(?:\/([\w-]+))?/.exec(location.hash); return m ? { site: m[1], page: m[2] || null } : null; };
 const shareRoute = () => /^#\/s\/([\w-]+)/.exec(location.hash)?.[1] || null;
 
 /** Jeton de lien mémorisé par document, pour qu'un rechargement de page garde l'accès. */
@@ -18,7 +20,7 @@ const recallShare = (docId: string) => { try { return sessionStorage.getItem('sd
 
 export function App() {
   const [ready, setReady] = useState(false);
-  const [auth, setAuth] = useState<{ need: boolean; first: boolean; guest?: { docName: string; requireLogin: boolean; token: string; docId?: string } } | null>(null);
+  const [auth, setAuth] = useState<{ need: boolean; first: boolean; guest?: { docName: string; requireLogin: boolean; token: string; docId?: string; siteId?: string } } | null>(null);
   const me = useStudio(s => s.me);
 
   const boot = async () => {
@@ -30,9 +32,10 @@ export function App() {
     const token = shareRoute();
     if (token) {
       try {
-        const s = await collab.share(token);
-        if (st.me) { shareState.token = token; rememberShare(s.docId, token); location.hash = `#/doc/${s.docId}`; }
-        else { setAuth({ need: true, first: false, guest: { docName: s.name, requireLogin: false, token, docId: s.docId } }); setReady(true); return; }
+        const s = await collab.shareInfo(token);
+        const target = s.siteId ? `#/site/${s.siteId}` : `#/doc/${s.docId}`;
+        if (st.me) { shareState.token = token; rememberShare(s.siteId ? 'site-' + s.siteId : s.docId!, token); location.hash = target; }
+        else { setAuth({ need: true, first: false, guest: { docName: s.name, requireLogin: false, token, docId: s.docId, siteId: s.siteId } }); setReady(true); return; }
       } catch (e: any) {
         if (/connecter/.test(e.message)) { setAuth({ need: true, first: false, guest: { docName: 'un document', requireLogin: true, token } }); setReady(true); return; }
         useStudio.getState().toast(e.message, 'error');
@@ -41,6 +44,8 @@ export function App() {
     }
     const id = route();
     if (id && !shareState.token) shareState.token = recallShare(id);
+    const sr = siteRoute();
+    if (sr && !shareState.token) shareState.token = recallShare('site-' + sr.site);
     if (!st.me && !shareState.token) setAuth({ need: true, first: !st.hasUsers });
     setReady(true);
   };
@@ -52,10 +57,11 @@ export function App() {
       <AuthScreen first={auth.first} guest={auth.guest && {
         docName: auth.guest.docName, requireLogin: auth.guest.requireLogin,
         onGuest: name => {
-          shareState.token = auth.guest!.token; shareState.guestName = name;
-          rememberShare(auth.guest!.docId!, auth.guest!.token);
+          const g = auth.guest!;
+          shareState.token = g.token; shareState.guestName = name;
+          rememberShare(g.siteId ? 'site-' + g.siteId : g.docId!, g.token);
           setAuth(null);
-          location.hash = `#/doc/${auth.guest!.docId}`;
+          location.hash = g.siteId ? `#/site/${g.siteId}` : `#/doc/${g.docId}`;
         },
       }}
         onDone={(m: Me | null) => {
@@ -71,6 +77,7 @@ export function App() {
 
 function Studio() {
   const [docId, setDocId] = useState<string | null>(route);
+  const [site, setSite] = useState(siteRoute);
   const [loading, setLoading] = useState(false);
   const { doc, open, close, toasts, loadTemplates, toast, me } = useStudio();
 
@@ -86,13 +93,14 @@ function Studio() {
       const t = shareRoute();
       if (t) { location.reload(); return; }        // nouveau lien : on repasse par la porte d'entrée
       setDocId(route());
+      setSite(siteRoute());
     };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!docId) { close(); document.title = 'Document Studio'; return; }
+    if (!docId) { close(); if (!siteRoute()) document.title = 'Document Studio'; return; }
     if (doc?.id === docId) return;
     if (!shareState.token) shareState.token = recallShare(docId);
     setLoading(true);
@@ -103,8 +111,9 @@ function Studio() {
   const guestOnly = api.backend.collab && !me;
   return (
     <>
-      {!docId && !guestOnly && <Library onOpen={id => { shareState.token = ''; location.hash = `#/doc/${id}`; }} />}
-      {!docId && guestOnly && <div className="empty" style={{ height: '100%' }}><h2>Lien de partage requis</h2><p>Ouvrez le lien qu'on vous a envoyé.</p></div>}
+      {!docId && site && <SiteReader key={site.site} siteId={site.site} pageId={site.page} onBack={() => { location.hash = guestOnly ? location.hash : '#/'; }} />}
+      {!docId && !site && !guestOnly && <Library onOpen={id => { shareState.token = ''; location.hash = `#/doc/${id}`; }} onOpenSite={id => { shareState.token = ''; location.hash = `#/site/${id}`; }} />}
+      {!docId && !site && guestOnly && <div className="empty" style={{ height: '100%' }}><h2>Lien de partage requis</h2><p>Ouvrez le lien qu'on vous a envoyé.</p></div>}
       {docId && doc?.id === docId && <Workspace key={docId} onBack={() => { location.hash = guestOnly ? location.hash : '#/'; }} />}
       {docId && loading && <div className="empty" style={{ height: '100%' }}><span className="spin" /></div>}
       <div className="toasts" aria-live="polite">
